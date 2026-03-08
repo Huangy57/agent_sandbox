@@ -1,8 +1,8 @@
-# Admin Hardening Guide
+# Admin Hardening Options
 
 The [bubblewrap sandbox](README.md) is fully user-space — no root or admin involvement needed. It provides kernel-enforced filesystem isolation for AI coding agents, with Slurm job wrapping as a default-on soft boundary.
 
-This document is a menu of **independent improvements** an admin can adopt to close remaining gaps. Each section is self-contained: pick what fits your threat model and effort budget. They are ordered roughly from least to most effort.
+This document describes **independent improvements** that could close remaining gaps. Each section is self-contained and can be evaluated against your site's threat model and effort budget. They are ordered roughly from least to most effort.
 
 > **Our priority:** Section 1 (Admin-Managed Slurm Wrappers) is the improvement we'd most like to see. It closes the main gap in the current setup — Slurm PATH shadowing — with moderate admin effort and no workflow changes for users.
 
@@ -25,7 +25,7 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 
 ### Concept
 
-The admin provides **sandboxed versions** of `sbatch` and `srun` that:
+The admin would provide **sandboxed versions** of `sbatch` and `srun` that:
 - Accept the same flags as the real commands — fully transparent to users and scripts
 - Wrap every job in `bwrap-sandbox.sh` before submission
 - Call the real Slurm binary internally to actually submit
@@ -63,7 +63,7 @@ chmod 0644 /etc/slurm/.submit-token
 
 Outside the sandbox, the token exists — the gateway passes through and users see standard Slurm behavior.
 
-**Step 2 — Install sandboxed sbatch/srun.** The admin provides sandboxed versions at a central location (e.g., `/app/slurm-sandbox/bin/`). These wrap every job in bwrap and call the real binary to submit:
+**Step 2 — Install sandboxed sbatch/srun.** Sandboxed versions would be placed at a central location (e.g., `/app/slurm-sandbox/bin/`). These wrap every job in bwrap and call the real binary to submit:
 
 ```bash
 #!/bin/bash
@@ -111,7 +111,7 @@ Inside the sandbox:
 
 ### Admin-installed bwrap with a fixed-policy wrapper
 
-The admin installs bwrap system-wide and provides a **setuid wrapper** that calls bwrap with hardcoded arguments. Users invoke the wrapper instead of raw bwrap, and cannot loosen the restrictions:
+If bwrap were installed system-wide, the admin could provide a **setuid wrapper** that calls bwrap with hardcoded arguments. Users would invoke the wrapper instead of raw bwrap and could not loosen the restrictions:
 
 ```bash
 # /usr/bin/sandbox-agent — admin-provided wrapper (setuid root or capabilities)
@@ -130,17 +130,17 @@ exec bwrap \
     -- "$@"
 ```
 
-Since the wrapper controls the bwrap arguments, the admin decides:
+Since the wrapper controls the bwrap arguments, the admin would control:
 - Which paths are visible, read-only, or writable
 - Which environment variables are blocked
 - Whether network namespaces are used
 - Which Slurm binaries are overlaid
 
-Users get a single command (`sandbox-agent -- claude`) with no configuration to manage or misconfigure.
+Users would get a single command (`sandbox-agent -- claude`) with no configuration to manage or misconfigure.
 
 ### Firejail
 
-[Firejail](https://firejail.wordpress.com/) is designed for exactly this model. It installs **setuid root** and the admin defines security profiles that users cannot override. The [README](README.md) notes that Firejail requires root — but that's the point in an admin-hardening context.
+[Firejail](https://firejail.wordpress.com/) is designed for exactly this model. It installs **setuid root** and the admin defines security profiles that users cannot override. The [README](README.md) notes that Firejail requires root — in an admin-hardening context, that's an advantage rather than a limitation.
 
 On top of the filesystem restrictions bwrap provides, Firejail adds:
 
@@ -200,7 +200,7 @@ Either approach would promote the sandbox from self-serve to admin-enforced.
 
 ## 3. Dedicated `${USER}_ai` Accounts
 
-**What it solves:** True user separation. No amount of bubblewrap can prevent a process from accessing files owned by the same UID. A dedicated OS account (`alice_ai`) runs the agent under a different UID, so filesystem permissions enforce isolation without any sandbox at all.
+**What it solves:** True user separation. No amount of bubblewrap can prevent a process from accessing files owned by the same UID. A dedicated OS account (`alice_ai`) would run the agent under a different UID, so filesystem permissions enforce isolation without any sandbox at all.
 
 **Effort:** High (new accounts, group structure, Slurm associations, ACLs). **Category:** Admin-enforced.
 
@@ -227,7 +227,7 @@ This means:
 
 ### Slurm Association
 
-Create a separate Slurm account and QOS with resource limits:
+A separate Slurm account and QOS could be created with resource limits:
 
 ```bash
 sacctmgr add account ai_agents Description="AI agent jobs"
@@ -244,7 +244,7 @@ sacctmgr modify user alice_ai set DefaultQOS=agent_qos
 
 ### File Permissions
 
-Use POSIX ACLs on shared data directories so agents can read lab data but not private dirs:
+POSIX ACLs on shared data directories would let agents read lab data but not private dirs:
 
 ```bash
 # Lab shared data: agents can read
@@ -273,7 +273,7 @@ OS user separation handles credential isolation — the agent physically cannot 
 
 ### Option A: Per-UID iptables Rules
 
-Block outbound network for agent UIDs, allowing only what's needed:
+Outbound network could be blocked for agent UIDs, allowing only what's needed:
 
 ```bash
 # Allow loopback and established connections
@@ -293,7 +293,7 @@ iptables -A OUTPUT -m owner --uid-owner alice_ai -j DROP
 
 ### Option B: Network Namespace with Socket Forwarding
 
-Run the agent in a network namespace with only the munge socket forwarded:
+The agent could run in a network namespace with only the munge socket forwarded:
 
 ```bash
 # Create namespace
@@ -380,7 +380,7 @@ uname -r
 
 ### File Access Auditing with auditd
 
-Log all file access by agent accounts:
+File access by agent accounts could be logged:
 
 ```bash
 # /etc/audit/rules.d/agent-audit.rules
@@ -395,13 +395,7 @@ Log all file access by agent accounts:
 -a always,exit -F arch=b64 -S connect -F uid=2001 -k agent_network
 ```
 
-Reload rules:
-
-```bash
-augenrules --load
-```
-
-Query logs:
+Reload rules with `augenrules --load`. Example queries:
 
 ```bash
 # What files did the agent open?
