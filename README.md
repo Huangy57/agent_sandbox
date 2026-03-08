@@ -1,5 +1,7 @@
 # Sandboxing Claude Code Agents on Gizmo
 
+> **Disclaimer:** This sandbox is a best-effort, user-space isolation layer. It is **not** a security product and comes with **no guarantees**. It reduces the attack surface of AI coding agents on shared HPC systems, but it cannot prevent all possible bypasses — see the [Security Summary](#security-summary) and [Admin Hardening Guide](ADMIN_HARDENING.md) for known limitations. Use at your own risk.
+
 ## Why Sandbox?
 
 AI coding agents like Claude Code are powerful — they read files, write code, run commands, and submit Slurm jobs on your behalf. But on a shared HPC system, your user account has access to a lot more than any single project needs:
