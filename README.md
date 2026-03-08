@@ -365,10 +365,9 @@ Mamba root (`$MAMBA_ROOT_PREFIX`) is read-only. Create environments outside the 
 | Agent reads `~/.aws` credentials | Hidden by tmpfs blanking | **Hard** |
 | Agent writes to other projects | NFS mounted read-only; only project dir writable | **Hard** |
 | Agent reads other users' data | Only mounted paths are visible | **Hard** |
-| Slurm job bypasses sandbox | `sbatch`/`srun` on PATH replaced with wrappers; sandbox dir read-only | **Medium** — default-on, requires calling `/usr/bin/sbatch` by absolute path to bypass |
-| Agent deliberately circumvents | Not fully prevented — same UID | **Soft** — requires explicit user instruction to bypass |
+| Slurm job bypasses sandbox | `sbatch`/`srun` on PATH replaced with wrappers; sandbox dir read-only | **Medium** — default-on but not kernel-enforced; agent would need to call `/usr/bin/sbatch` by absolute path to bypass, which it won't do unless explicitly instructed |
 
-**Bottom line:** The sandbox provides strong, kernel-enforced protection against accidental credential exposure, data leakage, and unintended writes. It does not protect against a user who deliberately instructs the agent to bypass it. For that level of isolation, a dedicated `${USER}_ai` system account with separate OS permissions is required.
+**Bottom line:** Filesystem isolation is kernel-enforced — the agent cannot access hidden paths or write outside the project directory regardless of what it tries. The only soft boundary is Slurm: the wrappers are default-on but could be bypassed by calling the real binaries by absolute path. For kernel-enforced Slurm isolation, a dedicated `${USER}_ai` system account with its own Slurm association would be needed.
 
 ---
 
