@@ -174,6 +174,12 @@ build_bwrap_args() {
     # the wrapper scripts or config.
     BWRAP_ARGS+=(--ro-bind "$SANDBOX_DIR" "$SANDBOX_DIR")
 
+    # Now that all HOME mounts/symlinks are in place, remount the tmpfs
+    # base read-only so stray writes to $HOME fail loudly instead of
+    # silently succeeding on ephemeral tmpfs. The bind mounts above
+    # remain unaffected since --remount-ro is non-recursive.
+    BWRAP_ARGS+=(--remount-ro "$HOME")
+
     # Block specific files (overlay with /dev/null)
     for blocked in "${BLOCKED_FILES[@]}"; do
         blocked="${blocked/\$HOME/$HOME}"
