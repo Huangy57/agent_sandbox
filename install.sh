@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANDBOX_DIR="$HOME/.claude/sandbox"
 
 echo "╔═══════════════════════════════════════════════╗"
-echo "║  Bubblewrap Sandbox Installer                  ║"
+echo "║  Bubblewrap Sandbox Installer                 ║"
 echo "╚═══════════════════════════════════════════════╝"
 echo ""
 
