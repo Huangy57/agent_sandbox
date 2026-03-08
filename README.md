@@ -42,9 +42,7 @@ The Slurm wrappers provide **strong default protection** but are not fully kerne
 1. **PATH shadowing** — `sbatch`/`srun` resolve to sandbox wrappers via PATH ordering.
 2. **Binary relocation** — the real ELF binaries at `/usr/bin/sbatch` and `/usr/bin/srun` are moved to an obscure internal path (`/tmp/.sandbox-slurm-real/`) and replaced with redirector scripts that funnel calls back through the sandbox wrappers.
 
-Under normal operation (including calling `/usr/bin/sbatch` by absolute path), the agent always hits the sandbox wrappers. To bypass this, the agent would need to discover and call the obscure internal path directly — something it has no reason to do and would not attempt unless explicitly instructed.
-
-**This is a strong soft boundary, but not a kernel-enforced one.** For full kernel-level isolation, you would need a dedicated `${USER}_ai` system account with its own home directory and Slurm association, so that OS-level file permissions prevent access regardless of what the agent does. What the sandbox **does** provide is strong protection against accidental exposure and against the agent autonomously accessing resources it shouldn't, which covers the vast majority of real-world risk.
+Under normal operation (including calling `/usr/bin/sbatch` by absolute path), the agent always hits the sandbox wrappers. **This is a soft boundary** — Slurm authentication (munge) is available inside the sandbox, so a determined bypass is possible. See [Admin Hardening Options](ADMIN_HARDENING.md) for approaches that can close this gap. In practice, the wrappers cover the paths an agent would use autonomously.
 
 ---
 
@@ -435,9 +433,9 @@ Mamba root (`$MAMBA_ROOT_PREFIX`) is read-only. Create environments outside the 
 | Agent reads `~/.aws` credentials | Hidden by tmpfs blanking | **Hard** |
 | Agent writes to other projects | NFS mounted read-only; only project dir writable | **Hard** |
 | Agent reads other users' data | Only mounted paths are visible | **Hard** |
-| Slurm job bypasses sandbox | `sbatch`/`srun` replaced at both PATH and `/usr/bin/` level; real binaries relocated to obscure internal path; sandbox dir read-only | **Medium-Hard** — agent cannot bypass by calling `/usr/bin/sbatch` directly (it's also a wrapper); would need to discover the obscure internal binary path |
+| Slurm job bypasses sandbox | `sbatch`/`srun` replaced at PATH and `/usr/bin/` level; real binaries relocated | **Soft** — covers normal usage; munge auth still available (see [Admin Hardening](ADMIN_HARDENING.md)) |
 
-**Bottom line:** Filesystem isolation is kernel-enforced — the agent cannot access hidden paths or write outside the project directory regardless of what it tries. Slurm wrapping is strong: both PATH shadowing and `/usr/bin/` binary relocation prevent accidental or naive bypass. The only remaining vector is calling the relocated binary by its obscure internal path — effectively a non-issue for autonomous agent behavior. For full kernel-enforced Slurm isolation, a dedicated `${USER}_ai` system account with its own Slurm association would be needed.
+**Bottom line:** Filesystem isolation is kernel-enforced. Slurm wrapping covers normal code paths but is ultimately soft because munge authentication is available inside the sandbox. See [Admin Hardening Options](ADMIN_HARDENING.md) for stronger approaches.
 
 ---
 

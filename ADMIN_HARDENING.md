@@ -19,7 +19,7 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 
 ## 1. Admin-Managed Slurm Wrappers
 
-**What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing, but an agent calling `/usr/bin/sbatch` by absolute path bypasses the wrappers. Admin-managed wrappers replace the standard binaries inside the sandbox so there is no unsandboxed Slurm binary reachable by the agent.
+**What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing and binary relocation (real binaries moved to an obscure internal path, `/usr/bin/` overlaid with redirectors). This prevents accidental bypass, but the underlying Slurm boundary is soft because the munge authentication socket is mounted inside the sandbox. An agent could bypass the wrappers by calling the relocated binaries directly, finding other Slurm binaries on the filesystem (e.g. `salloc`, module-loaded copies), talking to `slurmrestd` via `curl`, or crafting raw Slurm RPCs. Admin-managed wrappers with credential gating close this gap — even if the agent finds a Slurm binary, it can't authenticate without the credential.
 
 **Effort:** Medium. **Category:** Self-serve — strengthens the sandbox for users who opt in, but doesn't force anyone to use it.
 
@@ -428,7 +428,7 @@ The separate account/QOS makes it trivial to query, report on, and set limits fo
 
 | # | Improvement | Effort | Category | What It Closes |
 |---|---|---|---|---|
-| 1 | Admin-managed Slurm wrappers | Medium | Self-serve | Agent bypassing Slurm wrappers by absolute path |
+| 1 | Admin-managed Slurm wrappers | Medium | Self-serve | Agent submitting unsandboxed Slurm jobs (via relocated binaries, other Slurm CLIs, REST API, or raw munge RPCs) |
 | 2 | Admin-provided sandbox tools | Low-medium | Admin-enforced | Users weakening their own sandbox config |
 | 3 | Dedicated `${USER}_ai` accounts | High | Admin-enforced | Same-UID credential access; OS-level separation |
 | 4 | Network isolation | Medium-high | Admin-enforced (requires #3) | Data exfiltration via network |
