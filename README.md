@@ -200,9 +200,13 @@ If the agent needs to clone or push to private repositories over SSH, you can ex
 ```bash
 # In sandbox.conf — add to HOME_READONLY:
 HOME_READONLY=(
-    ".dotfiles"
+    ".bashrc"
+    ".gitconfig"
     ".linuxbrew"
     ".local/bin"
+    "micromamba"
+    ".condarc"
+    ".mambarc"
     # ... existing entries ...
     ".ssh"                 # ← add this
 )
@@ -228,11 +232,14 @@ HOME_READONLY=(
 ```bash
 # In sandbox.conf — add to HOME_READONLY:
 HOME_READONLY=(
-    ".dotfiles"
+    ".bashrc"
+    ".gitconfig"
     ".linuxbrew"
     ".local/bin"
+    "micromamba"
     ".condarc"
     ".mambarc"
+    # ... existing entries ...
     ".config/gh"           # ← add this
 )
 
@@ -257,17 +264,6 @@ READONLY_MOUNTS=(
 )
 ```
 
-#### Use a different dotfiles directory
-
-If your dotfiles aren't in `~/.dotfiles`:
-
-```bash
-# In sandbox.conf:
-DOTFILES_DIR="$HOME/.config/dotfiles"
-# or set to "" if you don't use a dotfiles repo
-DOTFILES_DIR=""
-```
-
 ---
 
 ## How It Works
@@ -284,7 +280,7 @@ Layer 2: Blank home
     tmpfs on $HOME → hides EVERYTHING
 
 Layer 3: Selective re-mount (read-only)
-    ~/.dotfiles, ~/.linuxbrew, ~/.local/bin, ...
+    ~/.bashrc, ~/.gitconfig, ~/.linuxbrew, ~/.local/bin, ...
 
 Layer 4: Writable mounts
     ~/.claude (session data + auth), project directory

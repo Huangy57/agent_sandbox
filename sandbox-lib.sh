@@ -28,10 +28,17 @@ SCRATCH_MOUNTS=(
     "/fh/scratch/delete90"
 )
 
-DOTFILES_DIR="$HOME/.dotfiles"
+DOTFILES_DIR=""
 
 HOME_READONLY=(
-    ".dotfiles"
+    ".bashrc" ".bash_profile" ".profile"
+    ".zshrc" ".zprofile"
+    ".inputrc"
+    ".gitconfig"
+    ".vimrc" ".vim"
+    ".tmux.conf"
+    ".dircolors"
+    ".pythonrc"
     ".linuxbrew"
     ".local/bin"
     ".local/share/jupyter"
@@ -44,15 +51,7 @@ HOME_READONLY=(
     ".mambarc"
 )
 
-HOME_SYMLINKS=(
-    ".gitconfig"
-    ".vimrc"
-    ".zshrc"
-    ".dircolors"
-    ".tmux.conf"
-    ".vim"
-    ".pythonrc"
-)
+HOME_SYMLINKS=()
 
 HOME_WRITABLE=(
     ".claude"
@@ -76,6 +75,29 @@ BLOCKED_ENV_VARS=(
 )
 
 ALLOWED_CREDENTIALS=()
+
+PASSTHROUGH_ENV_VARS=(
+    # lmod infrastructure
+    BASH_ENV
+    LMOD_CMD LMOD_DIR LMOD_PKG LMOD_ROOT LMOD_PACKAGE_PATH
+    LMOD_VERSION LMOD_sys LMOD_COLORIZE
+    MODULEPATH MODULEPATH_ROOT MODULESHOME
+    # lmod loaded-module state
+    LOADEDMODULES _LMFILES_
+    LD_LIBRARY_PATH LIBRARY_PATH CPATH
+    PKG_CONFIG_PATH CMAKE_PREFIX_PATH
+    PYTHONPATH R_LIBS_SITE
+    # Conda / Mamba
+    MAMBA_EXE MAMBA_ROOT_PREFIX
+    CONDA_EXE CONDA_PREFIX CONDA_DEFAULT_ENV
+    CONDA_SHLVL CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER
+    _CE_CONDA _CE_M
+    # Shell basics
+    LANG LC_ALL SHELL USER LOGNAME EDITOR TERM
+    MANPATH INFOPATH
+    # Homebrew
+    HOMEBREW_PREFIX HOMEBREW_CELLAR HOMEBREW_REPOSITORY
+)
 
 # ── Load user config ────────────────────────────────────────────
 
@@ -250,17 +272,7 @@ build_bwrap_args() {
     BWRAP_ARGS+=(--setenv SANDBOX_PROJECT_DIR "$project_dir")
 
     # Pass through HPC / tool environment if set
-    local passthrough_vars=(
-        BASH_ENV
-        LMOD_CMD LMOD_DIR LMOD_PKG LMOD_ROOT LMOD_PACKAGE_PATH
-        LMOD_VERSION LMOD_sys LMOD_COLORIZE
-        MODULEPATH MODULEPATH_ROOT MODULESHOME
-        MAMBA_EXE MAMBA_ROOT_PREFIX
-        LANG LC_ALL SHELL USER LOGNAME EDITOR TERM
-        MANPATH INFOPATH
-        HOMEBREW_PREFIX HOMEBREW_CELLAR HOMEBREW_REPOSITORY
-    )
-    for var in "${passthrough_vars[@]}"; do
+    for var in "${PASSTHROUGH_ENV_VARS[@]}"; do
         if [[ -n "${!var:-}" ]]; then
             BWRAP_ARGS+=(--setenv "$var" "${!var}")
         fi
