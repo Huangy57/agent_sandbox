@@ -17,26 +17,24 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 
 ## 1. Admin-Managed Slurm Wrappers
 
-**What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing, but an agent calling `/usr/bin/sbatch` by absolute path bypasses the wrappers. Admin-managed wrappers make it so the real Slurm binaries **won't work** inside the sandbox, even if called directly.
+**What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing, but an agent calling `/usr/bin/sbatch` by absolute path bypasses the wrappers. Admin-managed wrappers replace the standard binaries inside the sandbox so there is no unsandboxed Slurm binary reachable by the agent.
 
 **Effort:** Medium. **Category:** Admin-enforced.
 
 ### Concept
 
-The admin makes two changes:
+The admin provides **sandboxed versions** of `sbatch` and `srun` that:
+- Accept the same flags as the real commands — fully transparent to users and scripts
+- Wrap every job in `bwrap-sandbox.sh` before submission
+- Call the real Slurm binary internally to actually submit
 
-1. **Gate the real Slurm submission binaries behind a credential** that the sandbox blocks — a token file, env var, or socket that's hidden inside bwrap.
-2. **Provide enforcing wrappers** that submit jobs via an alternative path that doesn't require the blocked credential.
+Inside the bwrap sandbox, these sandboxed versions **replace** the standard binaries via bind-mount overlay. The agent (and any scripts it runs) just calls `sbatch` as normal and gets the sandboxed version — no script changes needed.
 
-Inside the bwrap sandbox:
-- The agent calls `sbatch` → hits the enforcing wrapper (via PATH or bind-mount overlay) → job is wrapped in bwrap → submitted successfully via the alternative path
-- The agent calls `/usr/bin/sbatch` directly (bypass attempt) → the real binary runs but **fails authentication** because the required credential is missing inside the sandbox
+The standard Slurm binaries are gated behind a credential (token file, env var, or socket) that is hidden inside the sandbox. Even if the agent discovers the real binary path, it can't submit without the credential.
 
-Outside the sandbox, the credential exists — normal user workflow is completely unaffected.
+### Setup
 
-### Example: token-file gate
-
-**Step 1 — Gate the real binaries.** Replace `/usr/bin/sbatch` with a gateway that checks for a token before calling the real binary:
+**Step 1 — Move the real binaries and gate them.** Replace `/usr/bin/sbatch` with a gateway that checks for a token before calling the real binary:
 
 ```bash
 #!/bin/bash
@@ -61,44 +59,45 @@ echo "submit-allowed" > /etc/slurm/.submit-token
 chmod 0644 /etc/slurm/.submit-token
 ```
 
-**Step 2 — Hide the token inside bwrap.** Add to the sandbox bwrap arguments:
+Outside the sandbox, the token exists — the gateway passes through and users see standard Slurm behavior.
 
-```bash
---ro-bind /dev/null /etc/slurm/.submit-token    # token appears empty
-```
-
-Now any direct call to `/usr/bin/sbatch` inside the sandbox fails — the gateway can't read the token.
-
-**Step 3 — Enforcing wrappers submit via slurmrestd.** The sandboxed wrappers don't call the real sbatch at all. They submit jobs through the [Slurm REST API](https://slurm.schedmd.com/rest_api.html) (slurmrestd), which authenticates via a different mechanism (e.g., JWT service token passed by the wrapper, or Unix socket auth):
+**Step 2 — Install sandboxed sbatch/srun.** The admin provides sandboxed versions at a central location (e.g., `/app/slurm-sandbox/bin/`). These wrap every job in bwrap and call the real binary to submit:
 
 ```bash
 #!/bin/bash
-# Enforcing sbatch wrapper (simplified)
-# Wraps the job command in bwrap, submits via REST API
+# /app/slurm-sandbox/bin/sbatch — sandboxed sbatch (admin-installed)
+# Accepts the same flags as real sbatch, wraps jobs in bwrap.
+REAL_SBATCH="/usr/libexec/slurm/sbatch-real"
 BWRAP_SANDBOX="$HOME/.claude/sandbox/bwrap-sandbox.sh"
 PROJECT_DIR="${SANDBOX_PROJECT_DIR:-$(pwd)}"
 
-# ... parse sbatch flags, build wrapped job script ...
+# ... parse sbatch flags, wrap job command in bwrap-sandbox.sh ...
 
-# Submit via slurmrestd instead of calling the real sbatch binary
-curl -s -X POST "http://localhost:6820/slurm/v0.0.40/job/submit" \
-    -H "Content-Type: application/json" \
-    -d @wrapped_job.json
+exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" \
+    --wrap="$BWRAP_SANDBOX --project-dir '$PROJECT_DIR' -- $WRAPPED_CMD"
 ```
 
-### Alternative credentials to gate on
+**Step 3 — Configure the bwrap sandbox.** Overlay the sandboxed versions and hide the token:
 
-The token file is the simplest example, but admins can gate on whatever is convenient:
+```bash
+# Add to bwrap arguments:
+--ro-bind /app/slurm-sandbox/bin/sbatch /usr/bin/sbatch   # overlay: sbatch → sandboxed version
+--ro-bind /app/slurm-sandbox/bin/srun   /usr/bin/srun     # overlay: srun → sandboxed version
+--ro-bind /dev/null /etc/slurm/.submit-token              # hide token
+```
+
+Inside the sandbox:
+- `sbatch` → sandboxed version (bind-mount overlay) → wraps in bwrap, calls real binary to submit
+- `/usr/bin/sbatch` directly → sandboxed version (same overlay)
+- `/usr/libexec/slurm/sbatch-real` directly → real binary, but **fails** (token hidden)
+
+### Alternative credentials to gate on
 
 | Credential | How to block in bwrap | Notes |
 |---|---|---|
 | Token file (`/etc/slurm/.submit-token`) | `--ro-bind /dev/null /etc/slurm/.submit-token` | Simplest; easy to audit |
-| Munge socket (`/run/munge/munge.socket.2`) | Don't mount `/run/munge/` | Blocks all munge auth; enforcing wrappers must use JWT or slurmrestd |
 | Environment variable (`SLURM_SUBMIT_KEY`) | Add to `BLOCKED_ENV_VARS` in `sandbox.conf` | Easy but env vars are more discoverable |
-
-### Why this doesn't require `${USER}_ai` accounts
-
-The enforcement is structural: the sandbox mount configuration determines what credentials are available, not the UID. Any session running inside bwrap loses the submission credential, regardless of which user started it.
+| Munge socket (`/run/munge/munge.socket.2`) | Don't mount `/run/munge/` | Strongest; blocks all direct Slurm auth. Sandboxed wrappers must submit via slurmrestd or a helper daemon instead of calling the real binary |
 
 ---
 
