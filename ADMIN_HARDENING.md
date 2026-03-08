@@ -15,35 +15,7 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 
 ---
 
-## 1. System-Wide Bubblewrap Installation
-
-**What it solves:** Each user currently installs bubblewrap via Homebrew, which is fragile and duplicated across accounts.
-
-**Effort:** Low (one-time package install or module build). **Category:** Self-serve.
-
-**How:**
-
-Install bwrap system-wide so every user gets it without Homebrew:
-
-```bash
-# Option A: Package manager (if distro supports it)
-apt install bubblewrap        # Debian/Ubuntu
-dnf install bubblewrap        # RHEL/Fedora
-
-# Option B: Install to /app (site convention)
-# Build from source, install to /app/bubblewrap/<version>/bin/bwrap
-
-# Option C: Lmod module
-# Create a modulefile that prepends /app/bubblewrap/<version>/bin to PATH
-```
-
-The sandbox scripts find bwrap via `PATH`, so no script changes are needed — just ensure `bwrap` is available on login and compute nodes.
-
-**Complements:** Everything below. This is the simplest starting point.
-
----
-
-## 2. Admin-Managed Slurm Wrappers
+## 1. Admin-Managed Slurm Wrappers
 
 **What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing, but an agent calling `/usr/bin/sbatch` by absolute path bypasses the wrappers. Admin-managed wrappers make it so the real Slurm binaries **won't work** inside the sandbox, even if called directly.
 
@@ -130,7 +102,7 @@ The enforcement is structural: the sandbox mount configuration determines what c
 
 ---
 
-## 3. Dedicated `${USER}_ai` Accounts
+## 2. Dedicated `${USER}_ai` Accounts
 
 **What it solves:** True user separation. No amount of bubblewrap can prevent a process from accessing files owned by the same UID. A dedicated OS account (`dotto_ai`) runs the agent under a different UID, so filesystem permissions enforce isolation without any sandbox at all.
 
@@ -197,7 +169,7 @@ OS user separation handles credential isolation — the agent physically cannot 
 
 ---
 
-## 4. Network Isolation
+## 3. Network Isolation
 
 **What it solves:** The current sandbox shares the host network stack (required for munge authentication and Slurm communication). This means an agent could use `curl` or `wget` to exfiltrate data.
 
@@ -245,7 +217,7 @@ This is more complex but provides stronger isolation — the agent has no networ
 
 ---
 
-## 5. Kernel Upgrade and Landlock
+## 4. Kernel Upgrade and Landlock
 
 **What it solves:** The current kernel (4.15) doesn't support [Landlock](https://docs.kernel.org/userspace-api/landlock.html), a Linux Security Module available since kernel 5.13. Landlock provides per-process filesystem access rules without requiring mount namespaces.
 
@@ -304,7 +276,7 @@ uname -r
 
 ---
 
-## 6. Audit Logging
+## 5. Audit Logging
 
 **What it solves:** Visibility into what the agent did — which files it accessed, which jobs it submitted, and what commands it ran. Useful for compliance, forensics, and debugging.
 
@@ -345,7 +317,7 @@ ausearch -k agent_exec --uid 2001 -ts today
 
 ### Slurm Job Accounting
 
-With dedicated Slurm accounts (Section 3), all agent jobs are automatically tracked:
+With dedicated Slurm accounts (Section 2), all agent jobs are automatically tracked:
 
 ```bash
 # All jobs submitted by agent accounts
@@ -366,11 +338,10 @@ The separate account/QOS makes it trivial to query, report on, and set limits fo
 
 | # | Improvement | Effort | Category | What It Closes |
 |---|---|---|---|---|
-| 1 | System-wide bwrap install | Low | Self-serve | Fragile per-user Homebrew installs |
-| 2 | Admin-managed Slurm wrappers | Medium | Admin-enforced | Agent bypassing Slurm wrappers by absolute path |
-| 3 | Dedicated `${USER}_ai` accounts | High | Admin-enforced | Same-UID credential access; OS-level separation |
-| 4 | Network isolation | Medium-high | Admin-enforced | Data exfiltration via network |
-| 5 | Kernel upgrade + Landlock | High | Self-serve | Simpler/stronger filesystem restrictions |
-| 6 | Audit logging | Low-medium | Admin-enforced | Visibility, compliance, forensics |
+| 1 | Admin-managed Slurm wrappers | Medium | Admin-enforced | Agent bypassing Slurm wrappers by absolute path |
+| 2 | Dedicated `${USER}_ai` accounts | High | Admin-enforced | Same-UID credential access; OS-level separation |
+| 3 | Network isolation | Medium-high | Admin-enforced | Data exfiltration via network |
+| 4 | Kernel upgrade + Landlock | High | Self-serve | Simpler/stronger filesystem restrictions |
+| 5 | Audit logging | Low-medium | Admin-enforced | Visibility, compliance, forensics |
 
 All sections are independent and complementary.
