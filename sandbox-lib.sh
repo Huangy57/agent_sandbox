@@ -35,6 +35,10 @@ HOME_READONLY=(
     ".linuxbrew"
     ".local/bin"
     ".local/share/jupyter"
+    ".local/share/claude"
+    ".local/state/claude"
+    ".cache/claude"
+    ".cache/claude-cli-nodejs"
     "micromamba"
     ".condarc"
     ".mambarc"
@@ -52,6 +56,7 @@ HOME_SYMLINKS=(
 
 HOME_WRITABLE=(
     ".claude"
+    ".claude.json"
 )
 
 BLOCKED_FILES=(
@@ -155,10 +160,10 @@ build_bwrap_args() {
         done
     fi
 
-    # Writable home subdirectories
+    # Writable home subdirectories (and files)
     for subdir in "${HOME_WRITABLE[@]}"; do
         local full_path="$HOME/$subdir"
-        if [[ -d "$full_path" ]]; then
+        if [[ -e "$full_path" ]]; then
             BWRAP_ARGS+=(--bind "$full_path" "$full_path")
         fi
     done
