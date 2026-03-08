@@ -4,13 +4,22 @@ The [bubblewrap sandbox](README.md) is fully user-space — no root or admin inv
 
 This document is a menu of **independent improvements** an admin can adopt to close remaining gaps. Each section is self-contained: pick what fits your threat model and effort budget. They are ordered roughly from least to most effort.
 
+### Self-serve vs. admin-enforced
+
+Each improvement falls into one of two categories:
+
+- **Self-serve** — makes it easier for users to sandbox their agents correctly. Works when users follow the setup. Does not prevent a user (or their agent) from bypassing the protection if they try.
+- **Admin-enforced** — the admin controls the enforcement mechanism. Users and agents cannot bypass it, even deliberately.
+
+The current user-space sandbox is entirely self-serve: it protects against accidental exposure and autonomous agent misbehavior, but a user who instructs their agent to bypass it can do so. The improvements below range from making the self-serve path smoother to adding hard admin-enforced boundaries.
+
 ---
 
 ## 1. System-Wide Bubblewrap Installation
 
 **What it solves:** Each user currently installs bubblewrap via Homebrew, which is fragile and duplicated across accounts.
 
-**Effort:** Low (one-time package install or module build).
+**Effort:** Low (one-time package install or module build). **Category:** Self-serve.
 
 **How:**
 
@@ -34,120 +43,98 @@ The sandbox scripts find bwrap via `PATH`, so no script changes are needed — j
 
 ---
 
-## 2. Kernel-Enforced Slurm Sandboxing (job_submit Plugin)
+## 2. Admin-Managed Slurm Wrappers
 
-**What it solves:** The current Slurm wrappers shadow `sbatch`/`srun` on PATH, but an agent could call `/usr/bin/sbatch` directly to bypass them. A `job_submit` plugin enforces sandboxing at the scheduler level — the controller rejects non-sandboxed jobs before they reach a compute node.
+**What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing, but an agent calling `/usr/bin/sbatch` by absolute path bypasses the wrappers. Admin-managed wrappers make it so the real Slurm binaries **won't work** inside the sandbox, even if called directly.
 
-**Effort:** Medium (Lua plugin + Slurm config reload).
+**Effort:** Medium. **Category:** Admin-enforced.
 
-**How:**
+### Concept
 
-Slurm's `job_submit/lua` plugin runs a Lua function on every job submission. You can inspect the job script or command and reject submissions that don't include the bwrap wrapper.
+The admin makes two changes:
 
-**Example `/etc/slurm/job_submit.lua`:**
+1. **Gate the real Slurm submission binaries behind a credential** that the sandbox blocks — a token file, env var, or socket that's hidden inside bwrap.
+2. **Provide enforcing wrappers** that submit jobs via an alternative path that doesn't require the blocked credential.
 
-```lua
-function slurm_job_submit(job_desc, part_list, submit_uid)
-    -- Only enforce for AI agent accounts/QOS
-    local dominated_qos = {"agent", "ai_sandbox"}
-    local dominated_accounts = {"dotto_ai", "labuser_ai"}
+Inside the bwrap sandbox:
+- The agent calls `sbatch` → hits the enforcing wrapper (via PATH or bind-mount overlay) → job is wrapped in bwrap → submitted successfully via the alternative path
+- The agent calls `/usr/bin/sbatch` directly (bypass attempt) → the real binary runs but **fails authentication** because the required credential is missing inside the sandbox
 
-    local dominated = false
-    for _, q in ipairs(dominated_qos) do
-        if job_desc.qos == q then dominated = true end
-    end
-    for _, a in ipairs(dominated_accounts) do
-        if job_desc.account == a then dominated = true end
-    end
+Outside the sandbox, the credential exists — normal user workflow is completely unaffected.
 
-    if not dominated then
-        return slurm.SUCCESS  -- normal users pass through
-    end
+### Example: token-file gate
 
-    -- Check that the job command includes bwrap-sandbox.sh
-    local script = job_desc.script or ""
-    local wrap = job_desc.work_dir or ""
-
-    if not string.find(script, "bwrap%-sandbox%.sh") and
-       not string.find(job_desc.argv_str or "", "bwrap%-sandbox%.sh") then
-        slurm.log_info("job_submit/lua: rejecting unsandboxed job from account %s",
-                       job_desc.account or "unknown")
-        return slurm.ERROR
-    end
-
-    return slurm.SUCCESS
-end
-
-function slurm_job_modify(job_desc, job_rec, part_list, modify_uid)
-    return slurm.SUCCESS
-end
-```
-
-**Enable in `slurm.conf`:**
-
-```
-JobSubmitPlugins=job_submit/lua
-```
-
-Then `scontrol reconfigure`.
-
-**Complements:** Works independently of user-space wrappers. Even if an agent bypasses PATH shadowing, the scheduler itself refuses the job.
-
----
-
-## 3. Slurm TaskProlog Alternative
-
-**What it solves:** Same as the `job_submit` plugin — ensures compute-node jobs run inside bwrap — but implemented as a prolog script that wraps the job at execution time rather than rejecting it at submission.
-
-**Effort:** Low-medium (simpler than the Lua plugin, but less clean since wrapping happens after scheduling).
-
-**How:**
-
-A `TaskProlog` script runs on the compute node before each job step. It can re-exec the job inside bwrap based on account, QOS, or an environment variable.
-
-**Example `/etc/slurm/task_prolog.sh`:**
+**Step 1 — Gate the real binaries.** Replace `/usr/bin/sbatch` with a gateway that checks for a token before calling the real binary:
 
 ```bash
 #!/bin/bash
-# Only wrap jobs from AI agent accounts
-case "$SLURM_JOB_ACCOUNT" in
-    *_ai)
-        # Already inside bwrap? Skip.
-        if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
-            exit 0
-        fi
-
-        SANDBOX_DIR="/fh/fast/${SLURM_JOB_ACCOUNT%_ai}/.claude/sandbox"
-        if [[ -x "$SANDBOX_DIR/bwrap-sandbox.sh" ]]; then
-            export SLURM_TASK_PROLOG_SANDBOX=1
-            exec "$SANDBOX_DIR/bwrap-sandbox.sh" \
-                --project-dir "${SLURM_SUBMIT_DIR:-$PWD}" \
-                -- "$@"
-        fi
-        ;;
-esac
-exit 0
+# /usr/bin/sbatch — gateway wrapper (admin-installed)
+SUBMIT_TOKEN="/etc/slurm/.submit-token"
+if [[ ! -r "$SUBMIT_TOKEN" ]]; then
+    echo "sbatch: direct submission not available in this environment." >&2
+    echo "Hint: use the sandboxed sbatch on your PATH." >&2
+    exit 1
+fi
+exec /usr/libexec/slurm/sbatch-real "$@"
 ```
 
-**Enable in `slurm.conf`:**
-
+```bash
+# One-time admin setup
+mkdir -p /usr/libexec/slurm
+mv /usr/bin/sbatch /usr/libexec/slurm/sbatch-real
+mv /usr/bin/srun   /usr/libexec/slurm/srun-real
+install -m 0755 gateway-sbatch /usr/bin/sbatch
+install -m 0755 gateway-srun   /usr/bin/srun
+echo "submit-allowed" > /etc/slurm/.submit-token
+chmod 0644 /etc/slurm/.submit-token
 ```
-TaskProlog=/etc/slurm/task_prolog.sh
+
+**Step 2 — Hide the token inside bwrap.** Add to the sandbox bwrap arguments:
+
+```bash
+--ro-bind /dev/null /etc/slurm/.submit-token    # token appears empty
 ```
 
-**Tradeoff vs. job_submit plugin:**
-- **TaskProlog**: Easier to deploy, no Lua, works with any Slurm version that supports TaskProlog. But the job is already scheduled when wrapping happens.
-- **job_submit**: Rejects bad jobs before scheduling, cleaner separation. Requires Lua plugin support.
+Now any direct call to `/usr/bin/sbatch` inside the sandbox fails — the gateway can't read the token.
 
-Both approaches key off the Slurm account name, so they pair naturally with dedicated `${USER}_ai` accounts (Section 4).
+**Step 3 — Enforcing wrappers submit via slurmrestd.** The sandboxed wrappers don't call the real sbatch at all. They submit jobs through the [Slurm REST API](https://slurm.schedmd.com/rest_api.html) (slurmrestd), which authenticates via a different mechanism (e.g., JWT service token passed by the wrapper, or Unix socket auth):
+
+```bash
+#!/bin/bash
+# Enforcing sbatch wrapper (simplified)
+# Wraps the job command in bwrap, submits via REST API
+BWRAP_SANDBOX="$HOME/.claude/sandbox/bwrap-sandbox.sh"
+PROJECT_DIR="${SANDBOX_PROJECT_DIR:-$(pwd)}"
+
+# ... parse sbatch flags, build wrapped job script ...
+
+# Submit via slurmrestd instead of calling the real sbatch binary
+curl -s -X POST "http://localhost:6820/slurm/v0.0.40/job/submit" \
+    -H "Content-Type: application/json" \
+    -d @wrapped_job.json
+```
+
+### Alternative credentials to gate on
+
+The token file is the simplest example, but admins can gate on whatever is convenient:
+
+| Credential | How to block in bwrap | Notes |
+|---|---|---|
+| Token file (`/etc/slurm/.submit-token`) | `--ro-bind /dev/null /etc/slurm/.submit-token` | Simplest; easy to audit |
+| Munge socket (`/run/munge/munge.socket.2`) | Don't mount `/run/munge/` | Blocks all munge auth; enforcing wrappers must use JWT or slurmrestd |
+| Environment variable (`SLURM_SUBMIT_KEY`) | Add to `BLOCKED_ENV_VARS` in `sandbox.conf` | Easy but env vars are more discoverable |
+
+### Why this doesn't require `${USER}_ai` accounts
+
+The enforcement is structural: the sandbox mount configuration determines what credentials are available, not the UID. Any session running inside bwrap loses the submission credential, regardless of which user started it.
 
 ---
 
-## 4. Dedicated `${USER}_ai` Accounts
+## 3. Dedicated `${USER}_ai` Accounts
 
 **What it solves:** True user separation. No amount of bubblewrap can prevent a process from accessing files owned by the same UID. A dedicated OS account (`dotto_ai`) runs the agent under a different UID, so filesystem permissions enforce isolation without any sandbox at all.
 
-**Effort:** High (new accounts, group structure, Slurm associations, ACLs).
+**Effort:** High (new accounts, group structure, Slurm associations, ACLs). **Category:** Admin-enforced.
 
 ### Account and Group Structure
 
@@ -210,11 +197,11 @@ OS user separation handles credential isolation — the agent physically cannot 
 
 ---
 
-## 5. Network Isolation
+## 4. Network Isolation
 
 **What it solves:** The current sandbox shares the host network stack (required for munge authentication and Slurm communication). This means an agent could use `curl` or `wget` to exfiltrate data.
 
-**Effort:** Medium-high (requires root, iptables/nftables or network namespace configuration).
+**Effort:** Medium-high (requires root, iptables/nftables or network namespace configuration). **Category:** Admin-enforced.
 
 ### Option A: Per-UID iptables Rules
 
@@ -258,11 +245,11 @@ This is more complex but provides stronger isolation — the agent has no networ
 
 ---
 
-## 6. Kernel Upgrade and Landlock
+## 5. Kernel Upgrade and Landlock
 
 **What it solves:** The current kernel (4.15) doesn't support [Landlock](https://docs.kernel.org/userspace-api/landlock.html), a Linux Security Module available since kernel 5.13. Landlock provides per-process filesystem access rules without requiring mount namespaces.
 
-**Effort:** High (kernel upgrade across the cluster).
+**Effort:** High (kernel upgrade across the cluster). **Category:** Self-serve (process restricts itself) or admin-enforced (if configured via system policy).
 
 ### What Landlock Provides
 
@@ -317,11 +304,11 @@ uname -r
 
 ---
 
-## 7. Audit Logging
+## 6. Audit Logging
 
 **What it solves:** Visibility into what the agent did — which files it accessed, which jobs it submitted, and what commands it ran. Useful for compliance, forensics, and debugging.
 
-**Effort:** Low-medium (auditd rules + Slurm accounting config).
+**Effort:** Low-medium (auditd rules + Slurm accounting config). **Category:** Admin-enforced.
 
 ### File Access Auditing with auditd
 
@@ -358,7 +345,7 @@ ausearch -k agent_exec --uid 2001 -ts today
 
 ### Slurm Job Accounting
 
-With dedicated Slurm accounts (Section 4), all agent jobs are automatically tracked:
+With dedicated Slurm accounts (Section 3), all agent jobs are automatically tracked:
 
 ```bash
 # All jobs submitted by agent accounts
@@ -377,14 +364,13 @@ The separate account/QOS makes it trivial to query, report on, and set limits fo
 
 ## Summary
 
-| # | Improvement | Effort | What It Closes |
-|---|---|---|---|
-| 1 | System-wide bwrap install | Low | Fragile per-user Homebrew installs |
-| 2 | Slurm job_submit plugin | Medium | Agent bypassing Slurm wrappers via absolute path |
-| 3 | Slurm TaskProlog | Low-medium | Same as #2 (alternative approach) |
-| 4 | Dedicated `${USER}_ai` accounts | High | Same-UID credential access; OS-level separation |
-| 5 | Network isolation | Medium-high | Data exfiltration via network |
-| 6 | Kernel upgrade + Landlock | High | Simpler/stronger filesystem restrictions |
-| 7 | Audit logging | Low-medium | Visibility, compliance, forensics |
+| # | Improvement | Effort | Category | What It Closes |
+|---|---|---|---|---|
+| 1 | System-wide bwrap install | Low | Self-serve | Fragile per-user Homebrew installs |
+| 2 | Admin-managed Slurm wrappers | Medium | Admin-enforced | Agent bypassing Slurm wrappers by absolute path |
+| 3 | Dedicated `${USER}_ai` accounts | High | Admin-enforced | Same-UID credential access; OS-level separation |
+| 4 | Network isolation | Medium-high | Admin-enforced | Data exfiltration via network |
+| 5 | Kernel upgrade + Landlock | High | Self-serve | Simpler/stronger filesystem restrictions |
+| 6 | Audit logging | Low-medium | Admin-enforced | Visibility, compliance, forensics |
 
-Choose #2 **or** #3 (not both). All other sections are independent and complementary.
+All sections are independent and complementary.
