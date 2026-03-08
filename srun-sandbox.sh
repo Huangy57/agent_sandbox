@@ -10,7 +10,14 @@
 
 set -euo pipefail
 
-REAL_SRUN="${REAL_SRUN:-/usr/bin/srun}"
+# Inside the sandbox, the real srun lives at an obscure internal path
+# (see SLURM_REAL_DIR in sandbox-lib.sh).  /usr/bin/srun is overlaid
+# with the shadow script, so we must use the relocated binary.
+if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
+    REAL_SRUN="${REAL_SRUN:-/tmp/.sandbox-slurm-real/srun}"
+else
+    REAL_SRUN="${REAL_SRUN:-/usr/bin/srun}"
+fi
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 source "$SCRIPT_DIR/sandbox-lib.sh"
 

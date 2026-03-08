@@ -33,17 +33,18 @@ Bubblewrap gives you **container-grade filesystem isolation** with none of the p
 
 Filesystem isolation on the login node is only half the story. The main point of HPC is submitting work to compute nodes via Slurm. If the agent can run `sbatch` or `srun`, and those jobs execute **outside** the sandbox, then all restrictions are trivially bypassed — the agent just submits a job that reads `~/.ssh` on the compute node.
 
-This sandbox solves the Slurm problem by **replacing `sbatch` and `srun` on PATH** inside the sandbox. Wrapper scripts at `~/.claude/sandbox/bin/` shadow the real commands, so every job submitted by the agent automatically runs inside bwrap on the compute node. Since bwrap and all scripts live on NFS, they're available on every compute node. The sandbox directory is mounted read-only, so the agent cannot tamper with the wrappers.
+This sandbox solves the Slurm problem with a two-layer approach. First, wrapper scripts at `~/.claude/sandbox/bin/` **shadow** `sbatch`/`srun` on PATH, so every job submitted by the agent automatically runs inside bwrap on the compute node. Second, the real `/usr/bin/sbatch` and `/usr/bin/srun` binaries are **relocated** to an obscure internal path (`/tmp/.sandbox-slurm-real/`) and replaced with redirector scripts — so even calling them by absolute path still goes through the sandbox wrappers. Since bwrap and all scripts live on NFS, they're available on every compute node. The sandbox directory is mounted read-only, so the agent cannot tamper with the wrappers.
 
 #### Limitations of the Slurm Wrappers
 
-The Slurm wrappers are **default-on but not kernel-enforced**. They work by shadowing `sbatch`/`srun` on PATH and wrapping job scripts in bwrap. This means:
+The Slurm wrappers provide **strong default protection** but are not fully kernel-enforced. They work by:
 
-- Under normal operation, the agent uses the wrappers transparently — it just calls `sbatch` and gets the sandboxed version.
-- A user who **deliberately instructs** the agent to bypass the sandbox (e.g., "call `/usr/bin/sbatch` directly") can circumvent the protection.
-- There is no kernel-level enforcement preventing calls to the real binaries by absolute path.
+1. **PATH shadowing** — `sbatch`/`srun` resolve to sandbox wrappers via PATH ordering.
+2. **Binary relocation** — the real ELF binaries at `/usr/bin/sbatch` and `/usr/bin/srun` are moved to an obscure internal path (`/tmp/.sandbox-slurm-real/`) and replaced with redirector scripts that funnel calls back through the sandbox wrappers.
 
-**This is a soft boundary, not a hard one.** For hard separation, you would need a dedicated `${USER}_ai` system account with its own home directory and Slurm association, so that OS-level file permissions prevent access regardless of what the agent does. Bubblewrap cannot replace OS user separation — it operates within a single user's privilege level. What it **does** provide is strong protection against accidental exposure and against the agent autonomously accessing resources it shouldn't, which covers the vast majority of real-world risk.
+Under normal operation (including calling `/usr/bin/sbatch` by absolute path), the agent always hits the sandbox wrappers. To bypass this, the agent would need to discover and call the obscure internal path directly — something it has no reason to do and would not attempt unless explicitly instructed.
+
+**This is a strong soft boundary, but not a kernel-enforced one.** For full kernel-level isolation, you would need a dedicated `${USER}_ai` system account with its own home directory and Slurm association, so that OS-level file permissions prevent access regardless of what the agent does. What the sandbox **does** provide is strong protection against accidental exposure and against the agent autonomously accessing resources it shouldn't, which covers the vast majority of real-world risk.
 
 ---
 
@@ -69,7 +70,7 @@ The installer:
 2. Copies scripts to `~/.claude/sandbox/`
 3. Creates `~/.claude/sandbox/sandbox.conf` (your personal config — won't overwrite)
 4. Installs agent instructions (only visible inside the sandbox, your CLAUDE.md is not modified)
-5. Runs a smoke test to verify everything works
+5. Runs the test suite to verify everything works
 
 ### What Gets Installed
 
@@ -81,6 +82,7 @@ The installer:
 ├── sbatch-sandbox.sh     # Slurm sbatch wrapper
 ├── srun-sandbox.sh       # Slurm srun wrapper
 ├── sandbox-claude.md     # Agent instructions (overlaid into CLAUDE.md inside sandbox)
+├── test.sh               # Test suite (28 tests)
 └── bin/
     ├── sbatch            # Shadows /usr/bin/sbatch inside sandbox
     └── srun              # Shadows /usr/bin/srun inside sandbox
@@ -96,6 +98,15 @@ bash ~/agent_container/install.sh
 ```
 
 Your `sandbox.conf` is never overwritten, so your customizations are preserved.
+
+### Running Tests
+
+The test suite verifies filesystem isolation, environment blocking, Slurm binary isolation, overlay generation, and self-protection:
+
+```bash
+bash ~/agent_container/test.sh            # run all tests
+bash ~/agent_container/test.sh --verbose   # show details on failure
+```
 
 ---
 
@@ -298,6 +309,10 @@ The sandbox uses a layered mount approach:
 Layer 1: System mounts (read-only)
     /usr, /lib, /lib64, /bin, /sbin, /etc, /app
 
+Layer 1.5: Slurm binary isolation
+    /usr/bin/sbatch, /usr/bin/srun → replaced with sandbox redirectors
+    Real binaries → relocated to /tmp/.sandbox-slurm-real/
+
 Layer 2: Blank home
     tmpfs on $HOME → hides EVERYTHING
 
@@ -310,11 +325,14 @@ Layer 4: Writable mounts
 Layer 5: Read-only sandbox overlay
     ~/.claude/sandbox/ → read-only (protects wrapper scripts)
 
-Layer 6: NFS storage (read-only base)
+Layer 6: CLAUDE.md + settings.json overlays
+    Merged with sandbox instructions/permissions
+
+Layer 7: NFS storage (read-only base)
     /fh/fast/setty_m → entire tree read-only
 
-Layer 7: Project directory (writable overlay)
-    /fh/fast/setty_m/user/you/project → writable on top of Layer 6
+Layer 8: Project directory (writable overlay)
+    /fh/fast/setty_m/user/you/project → writable on top of Layer 7
 ```
 
 The key insight is that bwrap processes mounts in order, and later mounts overlay earlier ones. So the project directory's `--bind` (writable) overlays the NFS tree's `--ro-bind` (read-only).
@@ -349,7 +367,7 @@ sbatch my_job.sh
 srun -n 4 python train.py
 ```
 
-The wrappers pass all flags through unchanged and call the real `/usr/bin/sbatch` or `/usr/bin/srun` internally.
+The wrappers pass all flags through unchanged and call the real Slurm binaries internally (relocated to `/tmp/.sandbox-slurm-real/` inside the sandbox).
 
 ### How the Wrappers Work
 
@@ -359,7 +377,9 @@ The wrappers pass all flags through unchanged and call the real `/usr/bin/sbatch
 
 ### Protection
 
-The sandbox directory (`~/.claude/sandbox/`) is mounted **read-only** inside the sandbox. The agent cannot modify the wrapper scripts, config, or bin stubs. To bypass the wrappers, the agent would need to explicitly call `/usr/bin/sbatch` by absolute path — something it would only do if specifically instructed.
+The sandbox directory (`~/.claude/sandbox/`) is mounted **read-only** inside the sandbox. The agent cannot modify the wrapper scripts, config, or bin stubs.
+
+The real Slurm binaries at `/usr/bin/sbatch` and `/usr/bin/srun` are **relocated** inside the sandbox to an obscure internal path and replaced with redirector scripts. This means even calling `/usr/bin/sbatch` by absolute path still goes through the sandbox wrappers. The agent would need to discover and call the internal path directly to bypass the wrappers — something it has no reason to do unless specifically instructed.
 
 ---
 
@@ -415,9 +435,9 @@ Mamba root (`$MAMBA_ROOT_PREFIX`) is read-only. Create environments outside the 
 | Agent reads `~/.aws` credentials | Hidden by tmpfs blanking | **Hard** |
 | Agent writes to other projects | NFS mounted read-only; only project dir writable | **Hard** |
 | Agent reads other users' data | Only mounted paths are visible | **Hard** |
-| Slurm job bypasses sandbox | `sbatch`/`srun` on PATH replaced with wrappers; sandbox dir read-only | **Medium** — default-on but not kernel-enforced; agent would need to call `/usr/bin/sbatch` by absolute path to bypass, which it won't do unless explicitly instructed |
+| Slurm job bypasses sandbox | `sbatch`/`srun` replaced at both PATH and `/usr/bin/` level; real binaries relocated to obscure internal path; sandbox dir read-only | **Medium-Hard** — agent cannot bypass by calling `/usr/bin/sbatch` directly (it's also a wrapper); would need to discover the obscure internal binary path |
 
-**Bottom line:** Filesystem isolation is kernel-enforced — the agent cannot access hidden paths or write outside the project directory regardless of what it tries. The only soft boundary is Slurm: the wrappers are default-on but could be bypassed by calling the real binaries by absolute path. For kernel-enforced Slurm isolation, a dedicated `${USER}_ai` system account with its own Slurm association would be needed.
+**Bottom line:** Filesystem isolation is kernel-enforced — the agent cannot access hidden paths or write outside the project directory regardless of what it tries. Slurm wrapping is strong: both PATH shadowing and `/usr/bin/` binary relocation prevent accidental or naive bypass. The only remaining vector is calling the relocated binary by its obscure internal path — effectively a non-issue for autonomous agent behavior. For full kernel-enforced Slurm isolation, a dedicated `${USER}_ai` system account with its own Slurm association would be needed.
 
 ---
 

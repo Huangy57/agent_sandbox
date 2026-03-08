@@ -6,7 +6,7 @@
 #   2. Copies sandbox scripts to ~/.claude/sandbox/
 #   3. Creates a default sandbox.conf (won't overwrite yours)
 #   4. Installs sandbox-claude.md (agent instructions, only visible inside sandbox)
-#   5. Runs a quick smoke test
+#   5. Runs the test suite to verify everything works
 #
 # Usage:
 #   git clone git@github.com:settylab/agent_container.git
@@ -57,7 +57,7 @@ echo "→ Installing sandbox scripts to $SANDBOX_DIR/"
 
 mkdir -p "$SANDBOX_DIR/bin"
 
-for file in sandbox-lib.sh bwrap-sandbox.sh sbatch-sandbox.sh srun-sandbox.sh sandbox-claude.md sandbox-settings.json; do
+for file in sandbox-lib.sh bwrap-sandbox.sh sbatch-sandbox.sh srun-sandbox.sh sandbox-claude.md sandbox-settings.json test.sh; do
     cp "$SCRIPT_DIR/$file" "$SANDBOX_DIR/$file"
 done
 
@@ -68,6 +68,7 @@ done
 chmod +x "$SANDBOX_DIR/bwrap-sandbox.sh"
 chmod +x "$SANDBOX_DIR/sbatch-sandbox.sh"
 chmod +x "$SANDBOX_DIR/srun-sandbox.sh"
+chmod +x "$SANDBOX_DIR/test.sh"
 chmod +x "$SANDBOX_DIR/bin/sbatch"
 chmod +x "$SANDBOX_DIR/bin/srun"
 
@@ -93,56 +94,15 @@ echo "  ✓ Agent instructions installed (sandbox-claude.md)"
 echo "    Only visible to the agent when running inside the sandbox."
 echo "    Edit $SANDBOX_DIR/sandbox-claude.md to customize."
 
-# ── Step 5: Smoke test ──────────────────────────────────────────
+# ── Step 5: Test suite ─────────────────────────────────────────
 
 echo ""
-echo "→ Running smoke test..."
+echo "→ Running test suite..."
+echo ""
 
-FAIL=0
-
-# Test 1: basic execution
-if "$SANDBOX_DIR/bwrap-sandbox.sh" -- bash -c 'echo ok' &>/dev/null; then
-    echo "  ✓ Sandbox starts and runs commands"
-else
-    echo "  ✗ Sandbox failed to start"
-    FAIL=1
-fi
-
-# Test 2: home is blanked
-if "$SANDBOX_DIR/bwrap-sandbox.sh" -- bash -c 'test -d ~/.ssh' 2>/dev/null; then
-    echo "  ✗ ~/.ssh is visible (should be hidden!)"
-    FAIL=1
-else
-    echo "  ✓ ~/.ssh is hidden"
-fi
-
-# Test 3: project dir is writable
-TESTFILE="$PWD/.sandbox-install-test-$$"
-if "$SANDBOX_DIR/bwrap-sandbox.sh" --project-dir "$PWD" -- bash -c "touch '$TESTFILE' && rm '$TESTFILE'" 2>/dev/null; then
-    echo "  ✓ Project directory is writable"
-else
-    echo "  ✗ Project directory is not writable"
-    FAIL=1
-fi
-
-# Test 4: slurm accessible
-if "$SANDBOX_DIR/bwrap-sandbox.sh" -- bash -c 'command -v squeue &>/dev/null' 2>/dev/null; then
-    echo "  ✓ Slurm commands accessible"
-else
-    echo "  ⚠ Slurm commands not found (may be OK if not on gizmo)"
-fi
-
-# Test 5: sbatch/srun resolve to wrappers
-if "$SANDBOX_DIR/bwrap-sandbox.sh" -- bash -c 'which sbatch | grep -q sandbox' 2>/dev/null; then
-    echo "  ✓ sbatch/srun shadowed by sandbox wrappers"
-else
-    echo "  ✗ sbatch not shadowed — PATH issue"
-    FAIL=1
-fi
-
-if [[ $FAIL -ne 0 ]]; then
+if ! bash "$SANDBOX_DIR/test.sh"; then
     echo ""
-    echo "⚠ Some tests failed. Check the output above."
+    echo "⚠ Some tests failed. Run 'bash $SANDBOX_DIR/test.sh --verbose' for details."
     exit 1
 fi
 

@@ -13,7 +13,14 @@
 
 set -euo pipefail
 
-REAL_SBATCH="${REAL_SBATCH:-/usr/bin/sbatch}"
+# Inside the sandbox, the real sbatch lives at an obscure internal path
+# (see SLURM_REAL_DIR in sandbox-lib.sh).  /usr/bin/sbatch is overlaid
+# with the shadow script, so we must use the relocated binary.
+if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
+    REAL_SBATCH="${REAL_SBATCH:-/tmp/.sandbox-slurm-real/sbatch}"
+else
+    REAL_SBATCH="${REAL_SBATCH:-/usr/bin/sbatch}"
+fi
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 BWRAP_SANDBOX="$SCRIPT_DIR/bwrap-sandbox.sh"
 
@@ -89,7 +96,7 @@ exec "$BWRAP_SANDBOX" --project-dir "$PROJECT_DIR" -- bash "$SCRIPT_PATH" ${SCRI
 WRAPPER_EOF
 
     chmod +x "$WRAPPER"
-    exec sbatch "${SBATCH_FLAGS[@]}" "$WRAPPER"
+    exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" "$WRAPPER"
 
 else
     echo "Error: No --wrap command or script specified." >&2
