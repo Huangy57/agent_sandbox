@@ -1,6 +1,6 @@
 # Admin Hardening Options
 
-The [bubblewrap sandbox](README.md) is fully user-space — no root or admin involvement needed. It provides kernel-enforced filesystem isolation for AI coding agents, with Slurm job wrapping as a default-on soft boundary.
+The [sandbox](README.md) is fully user-space — no root or admin involvement needed. Both backends (bubblewrap and Landlock) provide kernel-enforced filesystem isolation for AI coding agents, with Slurm job wrapping as a default-on soft boundary.
 
 This document describes **independent improvements** that could close remaining gaps. Each section is self-contained and can be evaluated against your site's threat model and effort budget. They are ordered roughly from least to most effort.
 
@@ -105,7 +105,7 @@ Inside the sandbox:
 
 ## 2. Admin-Provided Sandbox Tools (bwrap or Firejail)
 
-**What it solves:** When users install and configure bwrap themselves, they control the sandbox policy — and can weaken it. An admin-provided sandbox tool with a fixed policy turns the sandbox from self-serve to admin-enforced.
+**What it solves:** When users install and configure the sandbox themselves, they control the policy — and can weaken it. An admin-provided sandbox tool with a fixed policy turns the sandbox from self-serve to admin-enforced. This also solves the Landlock self-protection problem (§0) — scripts installed to an admin-owned path cannot be modified by the agent.
 
 **Effort:** Low-medium. **Category:** Admin-enforced.
 
@@ -195,6 +195,14 @@ firejail --profile=/etc/firejail/claude-agent.profile -- claude
 - **Firejail**: More features (network, seccomp, capabilities) out of the box. Provides stronger guarantees with less custom scripting.
 
 Either approach would promote the sandbox from self-serve to admin-enforced.
+
+### Why this matters more for the Landlock backend
+
+With the **bwrap** backend, the sandbox directory (`~/.claude/sandbox/`) is bind-mounted read-only inside the mount namespace — the agent cannot modify the wrapper scripts even though they live under the writable `~/.claude/` tree. With the **Landlock** backend, this self-protection is not possible: Landlock rules are *additive*, so granting write access to `~/.claude/` (which Claude Code requires) also grants write access to `~/.claude/sandbox/`. There is no "exclude" or "deny" mechanism in Landlock, and relocating the scripts elsewhere doesn't help if any ancestor directory is writable.
+
+The *current* sandbox session is always safe regardless — Landlock rules are kernel-enforced and irrevocable once applied. The risk is that a modified script could weaken *future* sessions or *submitted Slurm jobs* (since the Slurm wrappers run the sandbox scripts on compute nodes).
+
+For Landlock deployments where this matters, admin-installing the sandbox scripts to a root-owned path (e.g. `/opt/claude-sandbox/`) is the simplest fix. Landlock's default-deny model means the agent cannot write there unless explicitly granted access.
 
 ---
 
@@ -313,50 +321,13 @@ This is more complex but provides stronger isolation — the agent has no networ
 
 ---
 
-## 5. Kernel Upgrade and Landlock
+## 5. Kernel Upgrade (for Landlock)
 
-**What it solves:** The current kernel (4.15) doesn't support [Landlock](https://docs.kernel.org/userspace-api/landlock.html), a Linux Security Module available since kernel 5.13. Landlock provides per-process filesystem access rules without requiring mount namespaces.
+**What it solves:** Clusters running older kernels (< 5.13) cannot use the Landlock backend. Upgrading to kernel ≥ 5.13 enables Landlock as a sandbox backend, which is particularly valuable on Ubuntu 24.04+ where AppArmor blocks the unprivileged user namespaces that bwrap requires.
 
-**Effort:** High (kernel upgrade across the cluster). **Category:** Self-serve (process restricts itself) or admin-enforced (if configured via system policy).
+**Effort:** High (kernel upgrade across the cluster). **Category:** Enables self-serve Landlock sandbox.
 
-### What Landlock Provides
-
-Landlock lets an unprivileged process restrict its own filesystem access using a ruleset:
-
-```c
-// Pseudocode — Landlock access rule model
-struct landlock_ruleset_attr ruleset_attr = {
-    .handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE |
-                         LANDLOCK_ACCESS_FS_WRITE_FILE |
-                         LANDLOCK_ACCESS_FS_EXECUTE
-};
-
-int ruleset_fd = landlock_create_ruleset(&ruleset_attr, ...);
-
-// Allow read access to /fh/fast/mylab
-landlock_add_rule(ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &(struct landlock_path_beneath_attr){
-    .allowed_access = LANDLOCK_ACCESS_FS_READ_FILE,
-    .parent_fd = open("/fh/fast/mylab", O_PATH)
-});
-
-// Allow write access to project dir only
-landlock_add_rule(ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &(struct landlock_path_beneath_attr){
-    .allowed_access = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_WRITE_FILE,
-    .parent_fd = open("/fh/fast/mylab/user/alice/project", O_PATH)
-});
-
-// Enforce — cannot be undone by the process
-landlock_restrict_self(ruleset_fd, 0);
-```
-
-Once enforced, the process (and all its children) cannot access anything outside the ruleset. Unlike bwrap, Landlock doesn't use mount namespaces — it works with the real filesystem, just restricts what the process can see.
-
-### How It Complements bwrap
-
-- **bwrap** provides mount-namespace isolation: the agent sees a curated filesystem. Good for hiding paths entirely (e.g., `~/.ssh` doesn't exist).
-- **Landlock** provides access-control isolation: the agent sees the real filesystem but can't access restricted paths. Good for fine-grained rules without mount overhead.
-
-On kernel >= 5.13, you could use Landlock instead of bwrap for simpler setups, or layer it on top of bwrap for defense in depth.
+**Note:** The sandbox already supports Landlock as a first-class backend — auto-detected alongside bwrap. This section is only relevant for clusters still on older kernels. See `backends/landlock-sandbox.py` for the implementation.
 
 ### Kernel Version Check
 
@@ -365,10 +336,17 @@ uname -r
 # 4.15.0-213-generic  ← too old for Landlock
 
 # Landlock requires:
-# - Kernel >= 5.13
+# - Kernel >= 5.13 (Ubuntu 22.04+ ships 5.15+)
 # - CONFIG_SECURITY_LANDLOCK=y
 # - LSM boot parameter includes "landlock"
 ```
+
+### How Landlock Complements bwrap
+
+- **bwrap** provides mount-namespace isolation: the agent sees a curated filesystem. Paths are hidden entirely (ENOENT). Supports file overlays and sandbox self-protection.
+- **Landlock** provides LSM-based access control: the agent sees the real filesystem but can't access restricted paths (EACCES). No root or admin help needed — works even when AppArmor blocks user namespaces.
+
+On systems where both are available, auto-detection will select bwrap (for mount overlay and self-protection support). On systems where bwrap is blocked, Landlock provides equivalent filesystem isolation with no admin intervention required.
 
 ---
 
@@ -429,10 +407,10 @@ The separate account/QOS makes it trivial to query, report on, and set limits fo
 | # | Improvement | Effort | Category | What It Closes |
 |---|---|---|---|---|
 | 1 | Admin-managed Slurm wrappers | Medium | Self-serve | Agent submitting unsandboxed Slurm jobs (via relocated binaries, other Slurm CLIs, REST API, or raw munge RPCs) |
-| 2 | Admin-provided sandbox tools | Low-medium | Admin-enforced | Users weakening their own sandbox config |
+| 2 | Admin-provided sandbox tools | Low-medium | Admin-enforced | Users weakening their own sandbox config; also provides sandbox self-protection for Landlock backend |
 | 3 | Dedicated `${USER}_ai` accounts | High | Admin-enforced | Same-UID credential access; OS-level separation |
 | 4 | Network isolation | Medium-high | Admin-enforced (requires #3) | Data exfiltration via network |
-| 5 | Kernel upgrade + Landlock | High | Self-serve | Simpler/stronger filesystem restrictions |
+| 5 | Kernel upgrade (for Landlock) | High | Self-serve | Enables Landlock backend on older kernels |
 | 6 | Audit logging | Low-medium | Admin-enforced (requires #3) | Visibility, compliance, forensics |
 
 Sections 1, 2, and 5 are independent. Sections 4 and 6 require Section 3 (dedicated accounts).

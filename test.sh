@@ -421,8 +421,8 @@ echo "7. Sandbox self-protection"
 
 if [[ "$DETECTED_BACKEND" == "landlock" ]]; then
     # Landlock rules are additive — can't make a subdir read-only when its
-    # parent ($HOME/.claude) is writable.  Self-protection isn't possible.
-    skip "Sandbox self-protection — not possible with Landlock (rules are additive)"
+    # parent ($HOME/.claude) is writable.  See ADMIN_HARDENING.md §2.
+    skip "Sandbox self-protection — not supported with Landlock backend (see ADMIN_HARDENING.md)"
 else
     # Use a separate project dir so the writable project mount doesn't
     # overlap with the sandbox dir

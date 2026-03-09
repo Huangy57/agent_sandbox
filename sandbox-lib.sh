@@ -123,7 +123,7 @@ validate_project_dir() {
 # ── Backend detection ───────────────────────────────────────────
 
 # SANDBOX_BACKEND can be set in sandbox.conf or environment.
-# Values: auto (default), bwrap, landlock
+# Values: auto (picks best available), bwrap, landlock
 SANDBOX_BACKEND="${SANDBOX_BACKEND:-auto}"
 
 detect_backend() {
@@ -143,7 +143,7 @@ detect_backend() {
         return
     fi
 
-    # Auto-detect: try bwrap first, then landlock
+    # Auto-detect: try bwrap first (mount namespace), then landlock (LSM)
     # shellcheck disable=SC1090
     source "$SANDBOX_DIR/backends/bwrap.sh"
     if backend_available; then

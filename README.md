@@ -51,8 +51,8 @@ Under normal operation (including calling `/usr/bin/sbatch` by absolute path), t
 ### Prerequisites
 
 - Fred Hutch gizmo account (or similar HPC with Linux kernel ≥ 3.8)
-- **Bubblewrap backend** (default): requires `kernel.unprivileged_userns_clone = 1` and [Homebrew](https://brew.sh/) for installation. On Ubuntu 24.04+, AppArmor may also need configuration — see [Troubleshooting](#setting-up-uid-map-permission-denied-ubuntu-2404).
-- **Landlock backend** (fallback): requires kernel ≥ 5.13 (Ubuntu 22.04+). Works without root, even when AppArmor blocks user namespaces. No Homebrew needed — uses Python 3 only.
+- **Bubblewrap backend**: requires `kernel.unprivileged_userns_clone = 1` and [Homebrew](https://brew.sh/) for installation. On Ubuntu 24.04+, AppArmor may also need configuration — see [Troubleshooting](#setting-up-uid-map-permission-denied-ubuntu-2404).
+- **Landlock backend**: requires kernel ≥ 5.13 (Ubuntu 22.04+). Works without root, even when AppArmor blocks user namespaces. No Homebrew needed — uses Python 3 only.
 
 ### One-Command Setup
 
@@ -98,10 +98,10 @@ The sandbox supports two backends, auto-detected at startup:
 
 | Backend | How it works | Requirements | Blocked paths show as |
 |---|---|---|---|
-| **bwrap** (default) | Mount namespace isolation — hides paths entirely | `unprivileged_userns_clone=1`, no AppArmor userns restriction | `ENOENT` (No such file) |
-| **landlock** (fallback) | Landlock LSM — restricts filesystem access | Kernel ≥ 5.13, Python 3 | `EACCES` (Permission denied) |
+| **bwrap** | Mount namespace isolation — hides paths entirely | `unprivileged_userns_clone=1`, no AppArmor userns restriction | `ENOENT` (No such file) |
+| **landlock** | Landlock LSM — kernel-enforced filesystem ACLs | Kernel ≥ 5.13, Python 3 | `EACCES` (Permission denied) |
 
-Both provide equivalent security. The auto-detection tries bwrap first (stronger isolation), then falls back to Landlock (works without admin help on Ubuntu 24.04+).
+Both provide kernel-enforced filesystem isolation. The auto-detection picks whichever backend works on your system. Each has trade-offs — see [Backend Comparison](#appendix-sandbox-backend-comparison) for details.
 
 To force a backend: set `SANDBOX_BACKEND="landlock"` in `sandbox.conf` or use `--backend landlock` on the command line.
 
@@ -118,7 +118,7 @@ Your `sandbox.conf` is never overwritten, so your customizations are preserved.
 
 ### Running Tests
 
-The test suite verifies filesystem isolation, environment blocking, Slurm binary isolation, overlay generation, and self-protection:
+The test suite verifies filesystem isolation, environment blocking, Slurm binary isolation, and overlay generation:
 
 ```bash
 bash ~/agent_container/test.sh            # run all tests
@@ -339,7 +339,7 @@ Layer 3: Selective re-mount (read-only)
 Layer 4: Writable mounts
     ~/.claude (session data + auth), project directory
 
-Layer 5: Read-only sandbox overlay
+Layer 5: Read-only sandbox overlay (bwrap only)
     ~/.claude/sandbox/ → read-only (protects wrapper scripts)
 
 Layer 6: CLAUDE.md + settings.json overlays
@@ -394,7 +394,7 @@ The wrappers pass all flags through unchanged and call the real Slurm binaries i
 
 ### Protection
 
-The sandbox directory (`~/.claude/sandbox/`) is mounted **read-only** inside the sandbox. The agent cannot modify the wrapper scripts, config, or bin stubs.
+With the **bwrap** backend, the sandbox directory (`~/.claude/sandbox/`) is mounted **read-only** inside the sandbox. The agent cannot modify the wrapper scripts, config, or bin stubs. With the **Landlock** backend, self-protection of the sandbox directory is not possible — see [Admin Hardening](ADMIN_HARDENING.md#why-this-matters-more-for-the-landlock-backend) for details and mitigations.
 
 The real Slurm binaries at `/usr/bin/sbatch` and `/usr/bin/srun` are **relocated** inside the sandbox to an obscure internal path and replaced with redirector scripts. This means even calling `/usr/bin/sbatch` by absolute path still goes through the sandbox wrappers. The agent would need to discover and call the internal path directly to bypass the wrappers — something it has no reason to do unless specifically instructed.
 
@@ -477,10 +477,10 @@ Mamba root (`$MAMBA_ROOT_PREFIX`) is read-only. Create environments outside the 
 
 | Tool | Available? | Pros | Cons |
 |---|---|---|---|
-| **[Bubblewrap](https://github.com/containers/bubblewrap)** | ✅ Yes (Homebrew) | Strongest isolation (mount namespace), paths hidden entirely, supports file overlays | Requires unprivileged user namespaces; blocked by AppArmor on Ubuntu 24.04+ |
-| **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** | ✅ Yes (kernel ≥ 5.13) | No root needed, works on Ubuntu 24.04 despite AppArmor, pure kernel LSM | Blocked paths return EACCES not ENOENT; no mount overlays |
+| **[Bubblewrap](https://github.com/containers/bubblewrap)** | ✅ Yes (Homebrew) | Mount namespace isolation, paths hidden entirely (ENOENT), supports file overlays, sandbox self-protection | Requires unprivileged user namespaces; blocked by AppArmor on Ubuntu 24.04+ without admin help |
+| **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** | ✅ Yes (kernel ≥ 5.13) | No root or admin needed, works on Ubuntu 24.04 despite AppArmor, pure kernel LSM, no Homebrew dependency | Blocked paths return EACCES not ENOENT; no mount overlays; no sandbox self-protection (see [Admin Hardening](ADMIN_HARDENING.md#why-this-matters-more-for-the-landlock-backend)) |
 | **[Firejail](https://firejail.wordpress.com/)** | ❌ No | Feature-rich, profile-based | Requires setuid root or CAP_SYS_ADMIN |
 | **[Apptainer/Singularity](https://apptainer.org/)** | ✅ Yes (lmod) | Full container, HPC-native | Heavy — requires container images, path mapping |
 | **Docker** | ❌ No | Industry standard | Requires root daemon; not available on shared HPC |
 
-The sandbox auto-detects the best available backend. Bubblewrap is preferred for its stronger isolation (mount namespace hides paths entirely). Landlock is the fallback for systems where AppArmor blocks unprivileged user namespaces — it provides equivalent security through a different mechanism (LSM-based access control).
+The sandbox auto-detects the best available backend. Both bubblewrap and Landlock provide kernel-enforced filesystem isolation through different mechanisms — mount namespaces (bwrap) vs. LSM access control (Landlock). Each has trade-offs: bwrap hides paths entirely and supports self-protection of the sandbox scripts, while Landlock works without admin help on Ubuntu 24.04+ and has no external dependencies beyond Python 3.

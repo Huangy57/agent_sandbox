@@ -14,8 +14,9 @@
 #   - CLAUDE.md/settings.json merging uses in-place swap with backup/restore
 #   - Slurm wrapping relies on PATH shadowing only (no /usr/bin overlay)
 #   - Environment filtering done in shell (not via bwrap --unsetenv/--setenv)
-#   - Sandbox self-protection is not possible (Landlock rules are additive;
-#     can't make a subdir read-only when parent is writable)
+#   - Sandbox self-protection not possible (Landlock rules are additive;
+#     can't make a subdir read-only when parent is writable).
+#     This also affects Slurm wrappers — see ADMIN_HARDENING.md §2.
 
 LANDLOCK_SANDBOX="$SANDBOX_DIR/backends/landlock-sandbox.py"
 
