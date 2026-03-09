@@ -19,24 +19,21 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 
 ## 1. Admin-Managed Slurm Wrappers
 
-**What it solves:** The user-space sandbox intercepts `sbatch`/`srun` via PATH shadowing (both backends) and binary relocation (bwrap only — real binaries moved to an obscure internal path, `/usr/bin/` overlaid with redirectors). With the Landlock backend, only PATH shadowing is available — the real `/usr/bin/sbatch` remains directly callable. Even with bwrap, the underlying Slurm boundary is soft because the munge authentication socket is mounted inside the sandbox. An agent could bypass the wrappers by calling the real binaries directly (trivial with Landlock, requires path discovery with bwrap), finding other Slurm binaries on the filesystem (e.g. `salloc`, module-loaded copies), talking to `slurmrestd` via `curl`, or crafting raw Slurm RPCs. Admin-managed wrappers with credential gating close this gap for both backends — even if the agent finds a Slurm binary, it can't authenticate without the credential.
+**What it solves:** The user-space Slurm wrappers are a soft boundary — they rely on PATH shadowing (both backends) and binary relocation (bwrap only). An agent can bypass them by calling the real binaries directly (trivial with Landlock since `/usr/bin/sbatch` is unchanged), using other Slurm CLIs (`salloc`, module-loaded copies), or talking to `slurmrestd`/munge directly. Admin-managed wrappers with **credential gating** close this gap — even if the agent finds a Slurm binary, it can't authenticate without the credential.
 
 **Effort:** Medium. **Category:** Self-serve — strengthens the sandbox for users who opt in, but doesn't force anyone to use it.
 
 ### Concept
 
-The admin would provide **sandboxed versions** of `sbatch` and `srun` that:
-- Accept the same flags as the real commands — fully transparent to users and scripts
-- Wrap every job in the sandbox before submission
-- Call the real Slurm binary internally to actually submit
+1. The admin **gates the real Slurm binaries** behind a credential (token file, env var, or socket)
+2. The admin provides **sandboxed versions** of `sbatch`/`srun` that wrap every job in the sandbox before submission
+3. The credential is **hidden inside the sandbox** so the agent can't access it directly
 
-Inside the sandbox, these sandboxed versions **replace** the standard binaries via bind-mount overlay (bwrap) or PATH shadowing (Landlock). The agent (and any scripts it runs) just calls `sbatch` as normal and gets the sandboxed version — no script changes needed.
-
-The standard Slurm binaries are gated behind a credential (token file, env var, or socket) that is hidden inside the sandbox. Even if the agent discovers the real binary path, it can't submit without the credential.
+Outside the sandbox, the credential exists and Slurm works normally. Inside the sandbox, only the sandboxed wrappers (which call the real binary internally) can submit jobs.
 
 ### Setup
 
-**Step 1 — Move the real binaries and gate them.** Replace `/usr/bin/sbatch` with a gateway that checks for a token before calling the real binary:
+**Step 1 — Move the real binaries and gate them.** Replace `/usr/bin/sbatch` with a gateway that checks for a token:
 
 ```bash
 #!/bin/bash
@@ -61,25 +58,28 @@ echo "submit-allowed" > /etc/slurm/.submit-token
 chmod 0644 /etc/slurm/.submit-token
 ```
 
-Outside the sandbox, the token exists — the gateway passes through and users see standard Slurm behavior.
+Outside the sandbox, the token exists — the gateway passes through transparently.
 
-**Step 2 — Install sandboxed sbatch/srun.** Sandboxed versions would be placed at a central location (e.g., `/app/slurm-sandbox/bin/`). These wrap every job in bwrap and call the real binary to submit:
+**Step 2 — Install sandboxed sbatch/srun.** Place sandboxed versions at a central location (e.g., `/app/slurm-sandbox/bin/`):
 
 ```bash
 #!/bin/bash
 # /app/slurm-sandbox/bin/sbatch — sandboxed sbatch (admin-installed)
-# Accepts the same flags as real sbatch, wraps jobs in bwrap.
 REAL_SBATCH="/usr/libexec/slurm/sbatch-real"
-BWRAP_SANDBOX="$HOME/.claude/sandbox/bwrap-sandbox.sh"
+SANDBOX_EXEC="$HOME/.claude/sandbox/sandbox-exec.sh"
 PROJECT_DIR="${SANDBOX_PROJECT_DIR:-$(pwd)}"
 
-# ... parse sbatch flags, wrap job command in bwrap-sandbox.sh ...
+# ... parse sbatch flags, wrap job command in sandbox-exec.sh ...
 
 exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" \
-    --wrap="$BWRAP_SANDBOX --project-dir '$PROJECT_DIR' -- $WRAPPED_CMD"
+    --wrap="$SANDBOX_EXEC --project-dir '$PROJECT_DIR' -- $WRAPPED_CMD"
 ```
 
-**Step 3 — Configure the bwrap sandbox.** Overlay the sandboxed versions and hide the token:
+**Step 3 — Hide the credential inside the sandbox.** How this works depends on the backend:
+
+#### bwrap backend
+
+Overlay the sandboxed versions at `/usr/bin/` and hide the token via bind mounts:
 
 ```bash
 # Add to bwrap arguments:
@@ -89,17 +89,41 @@ exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" \
 ```
 
 Inside the sandbox:
-- `sbatch` → sandboxed version (bind-mount overlay) → wraps in bwrap, calls real binary to submit
+- `sbatch` → sandboxed version (bind-mount overlay) → wraps in sandbox, calls real binary
 - `/usr/bin/sbatch` directly → sandboxed version (same overlay)
 - `/usr/libexec/slurm/sbatch-real` directly → real binary, but **fails** (token hidden)
 
+#### Landlock backend
+
+Landlock cannot overlay files, so the approach is different — block *read access* to the token file by not granting Landlock rules for its directory:
+
+```bash
+# In backends/landlock.sh, do NOT add --ro for /etc/slurm/
+# Landlock is default-deny, so /etc/slurm/.submit-token is inaccessible
+# unless explicitly granted.
+#
+# The sandboxed wrappers at /app/slurm-sandbox/bin/ run OUTSIDE the
+# Landlock ruleset (they're invoked by the real sbatch gateway on the
+# compute node, not inside the sandboxed process), so they can read
+# the token and submit normally.
+```
+
+The admin also installs the sandboxed wrappers to PATH (e.g. `/app/slurm-sandbox/bin/` added to system PATH before `/usr/bin/`), so they shadow the gateway:
+
+Inside the sandbox:
+- `sbatch` → sandboxed version (PATH shadow) → wraps in sandbox, calls real binary
+- `/usr/bin/sbatch` directly → gateway → tries to read token → **EACCES** (Landlock blocks `/etc/slurm/`)
+- `/usr/libexec/slurm/sbatch-real` directly → real binary, but still needs munge (which can also be blocked — see below)
+
+This is slightly weaker than bwrap (the agent could discover `/usr/libexec/slurm/sbatch-real` and call it if munge is accessible), but combined with munge socket blocking it closes the gap completely.
+
 ### Alternative credentials to gate on
 
-| Credential | How to block in bwrap | Notes |
-|---|---|---|
-| Token file (`/etc/slurm/.submit-token`) | `--ro-bind /dev/null /etc/slurm/.submit-token` | Simplest; easy to audit |
-| Environment variable (`SLURM_SUBMIT_KEY`) | Add to `BLOCKED_ENV_VARS` in `sandbox.conf` | Easy but env vars are more discoverable |
-| Munge socket (`/run/munge/munge.socket.2`) | Don't mount `/run/munge/` | Strongest; blocks all direct Slurm auth. Sandboxed wrappers must submit via slurmrestd or a helper daemon instead of calling the real binary |
+| Credential | How to block in bwrap | How to block in Landlock | Notes |
+|---|---|---|---|
+| Token file (`/etc/slurm/.submit-token`) | `--ro-bind /dev/null <path>` | Don't grant `--ro` for `/etc/slurm/` | Simplest; easy to audit |
+| Environment variable (`SLURM_SUBMIT_KEY`) | `BLOCKED_ENV_VARS` in `sandbox.conf` | Same (env filtering works in both) | Easy but env vars are more discoverable |
+| Munge socket (`/run/munge/munge.socket.2`) | Don't mount `/run/munge/` | Don't grant `--ro` or `--rw` for `/run/munge/` | Strongest; blocks all direct Slurm auth. Sandboxed wrappers must submit via slurmrestd or a helper daemon |
 
 ---
 
@@ -198,16 +222,9 @@ Either approach would promote the sandbox from self-serve to admin-enforced.
 
 ### Why this matters more for the Landlock backend
 
-With the **bwrap** backend, the sandbox directory (`~/.claude/sandbox/`) is bind-mounted read-only inside the mount namespace — the agent cannot modify the wrapper scripts even though they live under the writable `~/.claude/` tree. Bwrap also **relocates the real Slurm binaries** (`/usr/bin/sbatch`, `/usr/bin/srun`) to an obscure internal path and overlays redirector scripts, so even absolute-path calls go through the sandbox wrappers.
+Landlock has no mount namespace, so unlike bwrap it cannot make the sandbox directory read-only or relocate Slurm binaries. This means an agent could modify the sandbox scripts (weakening future sessions or Slurm job wrappers), and `/usr/bin/sbatch` remains directly callable. The *current* session is always safe — Landlock rules are irrevocable once applied — but future sessions are at risk.
 
-With the **Landlock** backend, neither of these protections is possible — Landlock has no mount namespace, so:
-
-- **Sandbox self-protection:** Landlock rules are *additive*. Granting write access to `~/.claude/` (which Claude Code requires) also grants write access to `~/.claude/sandbox/`. There is no "exclude" or "deny" mechanism, and relocating the scripts elsewhere doesn't help if any ancestor directory is writable.
-- **Slurm binary relocation:** The real `/usr/bin/sbatch` and `/usr/bin/srun` remain in place and directly callable. Slurm wrapping relies on PATH shadowing only — the sandbox prepends its `bin/` directory to PATH so that `sbatch` resolves to the wrapper first, but an agent that calls `/usr/bin/sbatch` directly bypasses the wrappers entirely.
-
-The *current* sandbox session is always safe regardless — Landlock rules are kernel-enforced and irrevocable once applied via `landlock_restrict_self()`. The risk is that a modified sandbox script could weaken *future* sessions or *submitted Slurm jobs* (since the Slurm wrappers run the sandbox scripts on compute nodes).
-
-For Landlock deployments where this matters, admin-installing the sandbox scripts to a root-owned path (e.g. `/opt/claude-sandbox/`) is the simplest fix. Landlock's default-deny model means the agent cannot write there unless explicitly granted access. Section 1 (Admin-Managed Slurm Wrappers) addresses the Slurm bypass directly by gating the real binaries behind a credential.
+Admin-installing the sandbox scripts to a root-owned path (e.g. `/opt/claude-sandbox/`) is the simplest fix — Landlock's default-deny means the agent can't write there. Section 1 addresses the Slurm bypass by gating the real binaries behind a credential that Landlock blocks access to.
 
 ---
 
