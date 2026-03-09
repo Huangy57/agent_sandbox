@@ -136,6 +136,9 @@ detect_backend() {
         source "$SANDBOX_DIR/backends/${SANDBOX_BACKEND}.sh"
         if ! backend_available; then
             echo "Error: Requested backend '$SANDBOX_BACKEND' is not available on this system." >&2
+            echo "  Host:   $(hostname 2>/dev/null || echo unknown)" >&2
+            echo "  Kernel: $(uname -r 2>/dev/null || echo unknown)" >&2
+            echo "  LSMs:   $(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)" >&2
             exit 1
         fi
         return
@@ -156,14 +159,42 @@ detect_backend() {
         return
     fi
 
+    # Collect diagnostics for troubleshooting
+    local _host _kernel _os _userns _lsm _bwrap_path
+    _host="$(hostname 2>/dev/null || echo unknown)"
+    _kernel="$(uname -r 2>/dev/null || echo unknown)"
+    _os="$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || echo unknown)"
+    _bwrap_path="$(command -v bwrap 2>/dev/null || echo "not found")"
+    _userns="$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo "unknown")"
+    _lsm="$(cat /sys/kernel/security/lsm 2>/dev/null || echo "unknown")"
+
     echo "Error: No sandbox backend available." >&2
     echo "" >&2
-    echo "  Tried:" >&2
-    echo "    bwrap    — not found or user namespaces blocked (AppArmor?)" >&2
-    echo "    landlock — not available (kernel < 5.13 or Landlock disabled)" >&2
+    echo "  Host:       $_host" >&2
+    echo "  OS:         $_os" >&2
+    echo "  Kernel:     $_kernel" >&2
+    echo "  LSMs:       $_lsm" >&2
+    echo "  bwrap:      $_bwrap_path" >&2
+    echo "  userns max: $_userns" >&2
     echo "" >&2
-    echo "  Install bubblewrap:  brew install bubblewrap" >&2
-    echo "  Or ensure kernel ≥ 5.13 with Landlock enabled." >&2
+    echo "  Tried:" >&2
+    echo "    bwrap    — $(if [[ "$_bwrap_path" == "not found" ]]; then echo "binary not found"; elif echo "$_lsm" | grep -q apparmor && sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null | grep -q 1; then echo "blocked by AppArmor userns restriction"; else echo "failed (check user namespace support)"; fi)" >&2
+    echo "    landlock — $(
+        local _kmaj _kmin
+        _kmaj="$(uname -r | cut -d. -f1)"
+        _kmin="$(uname -r | cut -d. -f2)"
+        if [[ "$_kmaj" -lt 5 ]] 2>/dev/null || { [[ "$_kmaj" -eq 5 ]] && [[ "$_kmin" -lt 13 ]]; } 2>/dev/null; then
+            echo "kernel too old (need ≥ 5.13)"
+        elif ! echo "$_lsm" | grep -q landlock; then
+            echo "not in active LSM list"
+        else
+            echo "failed (check CONFIG_SECURITY_LANDLOCK)"
+        fi
+    )" >&2
+    echo "" >&2
+    echo "  Fix:" >&2
+    echo "    Install bubblewrap:  brew install bubblewrap" >&2
+    echo "    Or ensure kernel ≥ 5.13 with Landlock enabled." >&2
     exit 1
 }
 
