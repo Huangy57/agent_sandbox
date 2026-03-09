@@ -223,7 +223,12 @@ These are un-blocked (overriding `BLOCKED_ENV_VARS`) so the agent can use them i
 
 #### Allow SSH keys (e.g., for private Git repos)
 
-If the agent needs to clone or push to private repositories over SSH, you can expose your SSH keys inside the sandbox:
+If the agent needs to clone or push to private repositories over SSH, you *can* expose your SSH keys — but consider the alternatives first:
+
+- **Deploy keys** (recommended): Create a read-only [GitHub deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys) scoped to a single repository, place it in your project directory, and configure `GIT_SSH_COMMAND` to use it.
+- **HTTPS + token**: Use HTTPS cloning with a fine-grained personal access token (limited to specific repos) via the `ALLOWED_CREDENTIALS` mechanism.
+
+If you still need full SSH access:
 
 ```bash
 # In sandbox.conf — add to HOME_READONLY:
@@ -236,24 +241,11 @@ HOME_READONLY=(
     ".condarc"
     ".mambarc"
     # ... existing entries ...
-    ".ssh"                 # ← add this
+    ".ssh"                 # ← NOT RECOMMENDED — see warning below
 )
 ```
 
-> **Warning — understand the trade-offs before enabling this.**
->
-> Exposing `~/.ssh` gives the agent access to **all** your SSH private keys. This means the agent can, in principle:
->
-> - **Authenticate to any host** your keys grant access to — GitHub, remote clusters, production servers, etc.
-> - **Push code, delete branches, or modify repositories** you have write access to — not just the project it's working on.
-> - **Connect to remote machines** via SSH and execute commands there, entirely outside the sandbox's filesystem restrictions.
->
-> The sandbox cannot limit *which* SSH operations the agent performs once the keys are visible — it only controls filesystem access, not network connections or SSH authentication.
->
-> **Alternatives to consider:**
-> - **Deploy keys:** Create a read-only [GitHub deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys) scoped to a single repository, place it in your project directory, and configure `GIT_SSH_COMMAND` to use it — no need to expose `~/.ssh` at all.
-> - **HTTPS + token:** Use HTTPS cloning with a fine-grained personal access token (limited to specific repos) via the `ALLOWED_CREDENTIALS` mechanism instead.
-> - **Read-only mount:** Note that `HOME_READONLY` mounts the directory read-only, so the agent cannot modify or delete your keys — but it *can* read and use them for authentication.
+> **Sandbox escape risk:** Exposing `~/.ssh` gives the agent access to all your SSH private keys. On HPC clusters where passwordless SSH between nodes is configured, the agent can SSH to `localhost` or another node, getting an **unsandboxed shell** with full access to your account. The sandbox controls filesystem access only — not network connections or SSH authentication.
 
 #### Allow GitHub CLI
 
@@ -396,7 +388,7 @@ The wrappers pass all flags through unchanged and call the real Slurm binaries i
 
 **Bwrap backend:** The sandbox directory (`~/.claude/sandbox/`) is mounted **read-only** — the agent cannot modify wrapper scripts, config, or bin stubs. The real Slurm binaries at `/usr/bin/sbatch` and `/usr/bin/srun` are **relocated** to an obscure internal path and replaced with redirector scripts, so even calling `/usr/bin/sbatch` by absolute path goes through the sandbox wrappers.
 
-**Landlock backend:** Neither self-protection nor binary relocation is possible — Landlock has no mount namespace to overlay files or make subdirectories read-only. The Slurm wrappers work via PATH shadowing only, and the real `/usr/bin/sbatch` remains directly callable. See [Admin Hardening](ADMIN_HARDENING.md#why-this-matters-more-for-the-landlock-backend) for mitigations.
+**Landlock backend:** Neither self-protection nor binary relocation is possible — Landlock has no mount namespace to overlay files or make subdirectories read-only. The Slurm wrappers work via PATH shadowing only, and the real `/usr/bin/sbatch` remains directly callable. See [Admin Hardening](ADMIN_HARDENING.md) for mitigations.
 
 ---
 
@@ -468,9 +460,10 @@ Mamba root (`$MAMBA_ROOT_PREFIX`) is read-only. Create environments outside the 
 | Agent writes to other projects | Only project dir is writable | **Hard** |
 | Agent reads other users' data | Only explicitly allowed paths are accessible | **Hard** |
 | Slurm job bypasses sandbox | PATH shadowing (both backends) + binary relocation (bwrap only) | **Soft** — Landlock has PATH shadowing only; munge auth available in both (see [Admin Hardening](ADMIN_HARDENING.md)) |
-| Agent tampers with sandbox scripts | Read-only bind mount (bwrap) / not protected (Landlock) | **Hard** (bwrap) / **None** (Landlock) — see [Admin Hardening](ADMIN_HARDENING.md#why-this-matters-more-for-the-landlock-backend) |
+| Agent tampers with sandbox scripts | Read-only bind mount (bwrap) / not protected (Landlock) | **Hard** (bwrap) / **None** (Landlock) — see [Admin Hardening](ADMIN_HARDENING.md) §2 |
+| SSH escape (if `~/.ssh` exposed) | Not protected — sandbox does not restrict network | **None** — agent can SSH to localhost or other nodes to get an unsandboxed shell. **Do not expose `~/.ssh`** unless you understand this risk. |
 
-**Bottom line:** Filesystem isolation is kernel-enforced with both backends. Slurm wrapping covers normal code paths but is a soft boundary. With Landlock, the sandbox scripts themselves are not protected from modification — the current session is safe (kernel rules are irrevocable), but future sessions or Slurm jobs could be affected. See [Admin Hardening Options](ADMIN_HARDENING.md) for stronger approaches.
+**Bottom line:** Filesystem isolation is kernel-enforced with both backends. Slurm wrapping covers normal code paths but is a soft boundary. If `~/.ssh` is exposed via `HOME_READONLY`, the agent can escape the sandbox entirely by SSH-ing to localhost or another cluster node. With Landlock, the sandbox scripts themselves are not protected from modification — the current session is safe (kernel rules are irrevocable), but future sessions or Slurm jobs could be affected. See [Admin Hardening Options](ADMIN_HARDENING.md) for stronger approaches.
 
 ---
 
@@ -479,7 +472,7 @@ Mamba root (`$MAMBA_ROOT_PREFIX`) is read-only. Create environments outside the 
 | Tool | Available? | Pros | Cons |
 |---|---|---|---|
 | **[Bubblewrap](https://github.com/containers/bubblewrap)** | ✅ Yes (Homebrew) | Mount namespace isolation, paths hidden entirely (ENOENT), file overlays, Slurm binary relocation, sandbox self-protection | Requires unprivileged user namespaces; blocked by AppArmor on Ubuntu 24.04+ without admin help |
-| **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** | ✅ Yes (kernel ≥ 5.13) | No root or admin needed, works on Ubuntu 24.04 despite AppArmor, pure kernel LSM, no Homebrew dependency | No mount namespace — blocked paths return EACCES not ENOENT, no file overlays, no Slurm binary relocation, no sandbox self-protection (see [Admin Hardening](ADMIN_HARDENING.md#why-this-matters-more-for-the-landlock-backend)) |
+| **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** | ✅ Yes (kernel ≥ 5.13) | No root or admin needed, works on Ubuntu 24.04 despite AppArmor, pure kernel LSM, no Homebrew dependency | No mount namespace — blocked paths return EACCES not ENOENT, no file overlays, no Slurm binary relocation, no sandbox self-protection (see [Admin Hardening](ADMIN_HARDENING.md)) |
 | **[Firejail](https://firejail.wordpress.com/)** | ❌ No | Feature-rich, profile-based | Requires setuid root or CAP_SYS_ADMIN |
 | **[Apptainer/Singularity](https://apptainer.org/)** | ✅ Yes (lmod) | Full container, HPC-native | Heavy — requires container images, path mapping |
 | **Docker** | ❌ No | Industry standard | Requires root daemon; not available on shared HPC |
