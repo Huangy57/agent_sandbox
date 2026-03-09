@@ -76,9 +76,11 @@ echo "Backend: $DETECTED_BACKEND"
 echo ""
 
 # Check for AppArmor userns restriction (Ubuntu 24.04+)
+# Only error if bwrap actually fails — an AppArmor profile may already be in place.
 if [[ "$DETECTED_BACKEND" == "bwrap" ]] \
    && [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] \
-   && [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]]; then
+   && [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]] \
+   && ! bwrap --ro-bind / / true 2>/dev/null; then
     BWRAP_PATH="$(command -v bwrap 2>/dev/null || echo '/usr/bin/bwrap')"
     echo "ERROR: AppArmor blocks unprivileged user namespaces on this system."
     echo "  bwrap will fail with 'setting up uid map: Permission denied'."

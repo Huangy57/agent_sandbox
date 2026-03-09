@@ -37,8 +37,9 @@ function slurm_job_submit(job_desc, part_list, submit_uid)
         if provided == expected then
             slurm.log_info("job_submit/sandbox: uid %d provided valid bypass token", submit_uid)
             -- Clear the token from the job environment so it doesn't
-            -- leak into the compute node.
-            job_desc.environment["_SANDBOX_BYPASS"] = nil
+            -- leak into the compute node. Use empty string because
+            -- Slurm's Lua environment table does not support nil deletion.
+            job_desc.environment["_SANDBOX_BYPASS"] = ""
             return slurm.SUCCESS
         end
     end
@@ -62,12 +63,13 @@ function slurm_job_submit(job_desc, part_list, submit_uid)
         end
     end
 
+    -- Use a heredoc to pass the job body to sandbox-exec.sh.
+    -- This avoids Lua/shell quoting issues with single-quote escaping.
     local work_dir = job_desc.work_dir or "/tmp"
+    local body = table.concat(body_lines, "\n")
     local wrapper = string.format(
-        'exec %s --project-dir "%s" -- bash -c %s',
-        SANDBOX_EXEC,
-        work_dir,
-        "'" .. table.concat(body_lines, "\n"):gsub("'", "'\\''") .. "'"
+        "%s --project-dir %q -- bash <<'__SANDBOX_EOF__'\n%s\n__SANDBOX_EOF__",
+        SANDBOX_EXEC, work_dir, body
     )
 
     job_desc.script = table.concat(preamble, "\n") .. "\n" .. wrapper .. "\n"

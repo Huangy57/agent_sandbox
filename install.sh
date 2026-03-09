@@ -10,8 +10,8 @@
 #   6. Runs the test suite to verify everything works
 #
 # Usage:
-#   git clone git@github.com:settylab/agent_container.git
-#   bash agent_container/install.sh
+#   git clone git@github.com:settylab/agent_sandbox.git
+#   bash agent_sandbox/install.sh
 
 set -euo pipefail
 

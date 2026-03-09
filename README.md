@@ -58,10 +58,10 @@ With **bwrap**, even calling `/usr/bin/sbatch` by absolute path hits the sandbox
 
 ```bash
 # Clone the repo (if you haven't already)
-git clone git@github.com:settylab/agent_container.git ~/agent_container
+git clone git@github.com:settylab/agent_sandbox.git
 
 # Run the installer
-bash ~/agent_container/install.sh
+bash agent_sandbox/install.sh
 ```
 
 The installer:
@@ -110,8 +110,8 @@ To force a backend: set `SANDBOX_BACKEND="landlock"` in `sandbox.conf` or use `-
 To pick up newer scripts from the repo:
 
 ```bash
-cd ~/agent_container && git pull
-bash ~/agent_container/install.sh
+cd /path/to/agent_sandbox && git pull
+bash install.sh
 ```
 
 Your `sandbox.conf` is never overwritten, so your customizations are preserved.
@@ -121,8 +121,8 @@ Your `sandbox.conf` is never overwritten, so your customizations are preserved.
 The test suite verifies filesystem isolation, environment blocking, Slurm binary isolation, and overlay generation:
 
 ```bash
-bash ~/agent_container/test.sh            # run all tests
-bash ~/agent_container/test.sh --verbose   # show details on failure
+bash test.sh            # run all tests (from the repo directory)
+bash test.sh --verbose   # show details on failure
 ```
 
 ---

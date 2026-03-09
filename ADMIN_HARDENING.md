@@ -64,6 +64,17 @@ cp admin/job_submit.lua /etc/slurm/job_submit.lua
 
 Working examples are provided in `admin/`: `job_submit.lua` (Slurm plugin) and `token_protect.bpf.c` (eBPF program). The plugin intercepts batch jobs, checks for the bypass token in `_SANDBOX_BYPASS`, and wraps unvalidated jobs in `sandbox-exec.sh`. The token is cleared from the job environment after validation so it doesn't leak to the compute node. See `admin/README.md` for full setup instructions.
 
+### Tested
+
+All components have been end-to-end tested on an Ubuntu 24.04 VM (kernel 6.8, Slurm 23.11) with both sandbox backends:
+
+- **eBPF LSM program** — compiled with clang/libbpf, loaded via `bpftool prog loadall ... autoattach`. Normal processes can read the token file; processes with `PR_SET_NO_NEW_PRIVS` get `EACCES`.
+- **Slurm job submit plugin** — jobs without a bypass token are wrapped in `sandbox-exec.sh`; jobs with a valid `_SANDBOX_BYPASS` token pass through unsandboxed; the token is cleared from the job environment after validation.
+- **Combined flow (both backends)** — verified with both Landlock and bwrap. A sandboxed job cannot read the bypass token (eBPF denies it via `no_new_privs` check), so any Slurm job it submits lacks the token and gets sandboxed by the plugin. Sandboxed jobs show `SANDBOX_ACTIVE=1`, hidden `~/.ssh`, and `EACCES`/`ENOENT` on the token file. Unsandboxed jobs (valid token) see all files normally.
+- **Sandbox test suite** — 27/27 pass (bwrap), 21/21 pass + 3 skipped (Landlock — skips are for bwrap-only features like `/usr/bin` overlays and self-protection).
+
+The test setup used a single-node Slurm cluster (slurmctld + slurmd + slurmdbd with MariaDB). bwrap on Ubuntu 24.04 requires an AppArmor profile to allow unprivileged user namespaces (the installer prints the needed profile if this is the issue).
+
 ### Result
 
 | Scenario | What happens |
@@ -91,7 +102,7 @@ Install the sandbox scripts to a **root-owned path** (e.g., `/opt/claude-sandbox
 
 ```bash
 # One-time admin setup
-cp -r agent_container /opt/claude-sandbox
+cp -r agent_sandbox /opt/claude-sandbox
 chown -R root:root /opt/claude-sandbox
 chmod -R 755 /opt/claude-sandbox
 

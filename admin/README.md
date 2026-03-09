@@ -5,7 +5,7 @@ This directory contains the components for Section 1 of
 that sandboxes all jobs by default, with an eBPF LSM program that protects
 the bypass token from sandboxed processes.
 
-Tested on Ubuntu 24.04 (kernel 6.8, Slurm 23.11, Landlock backend).
+End-to-end tested on Ubuntu 24.04 (kernel 6.8, Slurm 23.11, Landlock backend) with a single-node Slurm cluster (slurmctld + slurmd + slurmdbd + MariaDB). All components — eBPF token protection, job submit plugin wrapping, and combined sandbox-by-default flow — verified working.
 
 ## Components
 
