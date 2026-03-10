@@ -48,10 +48,22 @@ skip() { ((SKIP++)); echo "  ⊘ $1 (skipped)"; }
 CURRENT_BACKEND=""
 
 # Run a command inside the sandbox. Returns the exit code.
-# Captures stdout+stderr in $OUTPUT.
+# Captures stdout+stderr in $OUTPUT, filtering known backend warnings.
 sandbox() {
-    OUTPUT=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" --project-dir "$PROJECT_DIR" -- "$@" 2>&1)
-    return $?
+    local raw
+    raw=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" --project-dir "$PROJECT_DIR" -- "$@" 2>&1)
+    local rc=$?
+    # Filter backend warnings that pollute output comparisons:
+    #   - landlock_add_rule warnings (file vs directory rule mismatch)
+    #   - "Restoring stale backup" from landlock/firejail crash recovery
+    #   - firejail "Parent/Child" status lines (suppressed by --quiet, but just in case)
+    OUTPUT=$(echo "$raw" | grep -v \
+        -e '^Warning: landlock_add_rule' \
+        -e '^Warning: Restoring stale backup' \
+        -e '^Parent pid ' \
+        -e '^Child process initialized' \
+        -e '^Parent is shutting down')
+    return $rc
 }
 
 is_bwrap() { [[ "$CURRENT_BACKEND" == "bwrap" ]]; }
@@ -444,11 +456,18 @@ else
     # Use a separate project dir so the writable project mount doesn't
     # overlap with the sandbox dir
     PROTECTION_PROJECT="$(mktemp -d)"
-    trap "rm -rf '$PROTECTION_PROJECT'" EXIT
 
     protection_sandbox() {
-        OUTPUT=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" --project-dir "$PROTECTION_PROJECT" -- "$@" 2>&1)
-        return $?
+        local raw
+        raw=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" --project-dir "$PROTECTION_PROJECT" -- "$@" 2>&1)
+        local rc=$?
+        OUTPUT=$(echo "$raw" | grep -v \
+            -e '^Warning: landlock_add_rule' \
+            -e '^Warning: Restoring stale backup' \
+            -e '^Parent pid ' \
+            -e '^Child process initialized' \
+            -e '^Parent is shutting down')
+        return $rc
     }
 
     if protection_sandbox bash -c "touch '$SCRIPT_DIR/test-tamper' 2>&1"; then
@@ -463,6 +482,8 @@ else
     else
         pass "sandbox-lib.sh is protected from modification"
     fi
+
+    rm -rf "$PROTECTION_PROJECT"
 fi
 
 # ── 8. Security hardening ─────────────────────────────────────────
@@ -548,10 +569,10 @@ fi
 # PID namespace isolation (bwrap and firejail — landlock does not have PID ns)
 if has_mount_ns; then
     if sandbox bash -c 'ps aux 2>/dev/null | wc -l'; then
-        PROC_COUNT="$OUTPUT"
+        PROC_COUNT=$(echo "$OUTPUT" | tail -1 | tr -d '[:space:]')
         # Inside a PID namespace, we should see very few processes
         # (bwrap/firejail, bash, ps, wc — typically < 10)
-        if [[ "$PROC_COUNT" -lt 20 ]]; then
+        if [[ "$PROC_COUNT" =~ ^[0-9]+$ ]] && [[ "$PROC_COUNT" -lt 20 ]]; then
             pass "PID namespace isolates host processes ($PROC_COUNT visible)"
         else
             fail "PID namespace not working — $PROC_COUNT processes visible"
@@ -564,7 +585,7 @@ fi
 # Seccomp filter (landlock and firejail — bwrap doesn't install one currently)
 if is_landlock || is_firejail; then
     if sandbox bash -c 'grep "^Seccomp:" /proc/self/status'; then
-        SECCOMP_MODE=$(echo "$OUTPUT" | awk '{print $2}')
+        SECCOMP_MODE=$(echo "$OUTPUT" | grep '^Seccomp:' | awk '{print $2}')
         if [[ "$SECCOMP_MODE" == "2" ]]; then
             pass "Seccomp filter is active (mode 2)"
         else
