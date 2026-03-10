@@ -168,6 +168,7 @@ json.dump(user, sys.stdout, indent=2)
         --nosound
         --no3d
         --restrict-namespaces
+        --private-tmp
     )
 
     # PID namespace is enabled by default in firejail (no flag needed).
@@ -195,7 +196,11 @@ json.dump(user, sys.stdout, indent=2)
     #   - /run/systemd/private: systemd private socket
     #   - /run/containerd: container runtime socket
     # (pentest finding, 2026-03)
-    for _run_danger in /run/dbus /run/user /run/systemd/private /run/containerd; do
+    for _run_danger in \
+        /run/dbus /run/user /run/systemd/private /run/containerd \
+        /run/snapd.socket /run/snapd-snap.socket \
+        /run/systemd/notify \
+        /run/lxd-installer.socket; do
         if [[ -e "$_run_danger" ]]; then
             FIREJAIL_ARGS+=(--blacklist="$_run_danger")
         fi
@@ -203,6 +208,11 @@ json.dump(user, sys.stdout, indent=2)
 
     # /run/munge, /run/nscd, /run/systemd/resolve remain accessible
     # (read-only by default in firejail's mount namespace)
+
+    # Nested firejail: --nonewprivs prevents the setuid binary from
+    # gaining privileges, --restrict-namespaces blocks new namespace
+    # creation, and --join is blocked by --shell=none. The nested
+    # instance runs with fewer privileges than the parent sandbox.
 
     # --- Home directory paths ---
     # --private gives us a clean tmpfs $HOME. --whitelist brings back

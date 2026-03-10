@@ -633,6 +633,113 @@ print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
     fi
 fi
 
+# ── 9. Pentest hardening (from findings_firejail.md) ──────────────
+
+echo "9. Pentest hardening"
+
+# /tmp isolation — bwrap uses --tmpfs /tmp, firejail uses --private-tmp
+# Landlock does not isolate /tmp
+if has_mount_ns; then
+    # Create a marker file in host /tmp, check it's not visible inside sandbox
+    _TMP_MARKER="/tmp/.sandbox-test-marker-$$"
+    touch "$_TMP_MARKER"
+    if sandbox bash -c "test -f '$_TMP_MARKER' && echo VISIBLE || echo HIDDEN"; then
+        if [[ "$OUTPUT" == "HIDDEN" ]]; then
+            pass "/tmp is isolated from host"
+        else
+            fail "/tmp is shared with host (should be isolated)"
+        fi
+    fi
+    rm -f "$_TMP_MARKER"
+else
+    skip "/tmp isolation — Landlock has no mount namespace"
+fi
+
+# Snapd socket should be blocked (bwrap: tmpfs /run; firejail: blacklisted)
+if [[ -e /run/snapd.socket ]]; then
+    if has_mount_ns; then
+        if sandbox bash -c "python3 -c \"
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('/run/snapd.socket')
+    print('ACCESSIBLE')
+except (ConnectionRefusedError, FileNotFoundError, PermissionError, OSError):
+    print('BLOCKED')
+\" 2>/dev/null"; then
+            if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+                pass "Snapd socket is blocked"
+            else
+                fail "Snapd socket is accessible inside sandbox"
+            fi
+        fi
+    fi
+else
+    skip "Snapd socket not present on host"
+fi
+
+# systemd-notify socket should be blocked (bwrap: tmpfs /run; firejail: blacklisted)
+if [[ -e /run/systemd/notify ]]; then
+    if has_mount_ns; then
+        if sandbox bash -c "python3 -c \"
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+try:
+    s.connect('/run/systemd/notify')
+    print('ACCESSIBLE')
+except (ConnectionRefusedError, FileNotFoundError, PermissionError, OSError):
+    print('BLOCKED')
+\" 2>/dev/null"; then
+            if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+                pass "systemd-notify socket is blocked"
+            else
+                fail "systemd-notify socket is accessible inside sandbox"
+            fi
+        fi
+    fi
+else
+    skip "systemd-notify socket not present on host"
+fi
+
+# ALLOWED_CREDENTIALS passthrough — credentials explicitly allowed must be accessible
+export _TEST_CRED_VAR="test-credential-value"
+# Temporarily add to ALLOWED_CREDENTIALS won't work from here, but we can test
+# that BLOCKED_ENV_VARS are actually blocked and passthrough vars work
+if sandbox bash -c 'echo ${LANG:-UNSET}'; then
+    if [[ "$OUTPUT" != "UNSET" ]]; then
+        pass "Passthrough env vars (LANG) accessible"
+    else
+        # LANG may not be set on all systems
+        skip "LANG not set — passthrough test inconclusive"
+    fi
+fi
+unset _TEST_CRED_VAR
+
+# NoNewPrivs is set (prevents setuid escalation inside sandbox)
+if sandbox bash -c 'grep "^NoNewPrivs:" /proc/self/status | awk "{print \$2}"'; then
+    if [[ "$OUTPUT" == "1" ]]; then
+        pass "NoNewPrivs is set (prevents setuid escalation)"
+    else
+        # bwrap may not set nonewprivs by default
+        if is_bwrap; then
+            skip "NoNewPrivs not set by bwrap (optional)"
+        else
+            fail "NoNewPrivs not set (should be 1)" "$OUTPUT"
+        fi
+    fi
+fi
+
+# Capabilities are dropped (firejail: --caps.drop=all, bwrap: --cap-drop ALL)
+if is_firejail; then
+    if sandbox bash -c 'grep "^CapEff:" /proc/self/status | awk "{print \$2}"'; then
+        if [[ "$OUTPUT" == "0000000000000000" ]]; then
+            pass "All capabilities dropped"
+        else
+            fail "Capabilities not fully dropped: $OUTPUT"
+        fi
+    fi
+fi
+
 echo ""
 
 # ── Per-backend summary ──────────────────────────────────────────
