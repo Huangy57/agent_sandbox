@@ -400,7 +400,7 @@ The wrappers pass all flags through unchanged and call the real Slurm binaries i
 
 ## Agent Awareness (CLAUDE.md)
 
-The sandbox automatically injects instructions into the agent's `CLAUDE.md` — **without modifying your actual CLAUDE.md file**. On each sandbox start, `~/.claude/sandbox-config/` is rebuilt with a merged `CLAUDE.md` and `settings.json`, and `CLAUDE_CONFIG_DIR` is set so Claude Code reads from there instead of `~/.claude/` directly. Everything else in `~/.claude/` is symlinked through, so sessions, projects, and other state work normally.
+The sandbox automatically injects instructions into the agent's `CLAUDE.md` — **without modifying your actual CLAUDE.md file**. On each sandbox start, `~/.claude/sandbox-config/` is populated with a merged `CLAUDE.md` and `settings.json`, and `CLAUDE_CONFIG_DIR` is set so Claude Code reads from there instead of `~/.claude/` directly. Everything else in `~/.claude/` is symlinked through, so sessions, projects, and other state work normally. Files that were updated inside the sandbox (e.g. refreshed OAuth tokens) are preserved across restarts — they are only replaced with a symlink when the outside version is newer.
 
 This means the agent:
 

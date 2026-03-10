@@ -215,22 +215,26 @@ json.dump(user, sys.stdout, indent=2)
         cp "$user_settings" "$config_dir/settings.json"
     fi
 
-    # --- Symlink everything else ---
-    for item in "$real_claude_dir"/*; do
+    # --- Symlink everything else (preserve fresher sandbox copies) ---
+    # Claude Code refreshes tokens via write-to-temp + rename, which
+    # replaces our symlinks with real files.  Only overwrite with a
+    # symlink if the outside file is newer; otherwise keep the
+    # sandbox-config copy (e.g. a refreshed token from a prior session).
+    for item in "$real_claude_dir"/* "$real_claude_dir"/.*; do
         local name
         name="$(basename "$item")"
+        [[ "$name" == "." || "$name" == ".." ]] && continue
         case "$name" in
             CLAUDE.md|settings.json|sandbox-config) continue ;;
         esac
         [[ "$name" == *.sandbox-backup.* ]] && continue
-        ln -sf "$item" "$config_dir/$name"
-    done
-
-    for item in "$real_claude_dir"/.*; do
-        local name
-        name="$(basename "$item")"
-        [[ "$name" == "." || "$name" == ".." ]] && continue
-        ln -sf "$item" "$config_dir/$name"
+        local target="$config_dir/$name"
+        # If target is a real file (not a symlink) and newer than the
+        # outside version, keep it — it was refreshed inside the sandbox.
+        if [[ -e "$target" && ! -L "$target" && "$target" -nt "$item" ]]; then
+            continue
+        fi
+        ln -sf "$item" "$target"
     done
 
     export CLAUDE_CONFIG_DIR="$config_dir"
