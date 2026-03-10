@@ -123,22 +123,12 @@ Firejail closes the remaining gaps that Landlock alone cannot address. Key compa
 # 1. Install firejail
 sudo apt install firejail
 
-# 2. Ensure the slurm user has a system-range UID (< 1000)
-#    Firejail filters /etc/passwd, removing UIDs in the dynamic range
-#    (~1000–64999, except the current user). If slurm has a high UID
-#    (e.g., 6281 from LDAP or 64030 from adduser), sbatch fails inside
-#    the sandbox because it can't resolve SlurmUser from slurm.conf.
-#    For LDAP-managed environments, change the UID in the directory service.
-sudo usermod -u 120 slurm
-sudo groupmod -g 120 slurm
-# Fix ownership of slurm state dirs after UID change:
-sudo find /var/lib/slurm /var/log/slurm /var/spool/slurmd \
-    -exec chown slurm:slurm {} + 2>/dev/null
-
-# 3. The sandbox auto-detects firejail — no user config needed.
+# 2. The sandbox auto-detects firejail — no user config needed.
 #    Force firejail for testing:
 SANDBOX_BACKEND=firejail ./sandbox-exec.sh -- bash
 ```
+
+The sandbox uses `--allusers` to disable firejail's `/etc/passwd` filtering, which would otherwise remove UIDs >= `UID_MIN` (typically 1000) and break Slurm if the `slurm` user has a UID in that range (common with LDAP). This is safe because `/etc/passwd` is world-readable, `--nonewprivs` prevents setuid escalation, and `--whitelist` already hides other users' home directories.
 
 #### HPC compatibility notes (firejail)
 

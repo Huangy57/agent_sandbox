@@ -73,6 +73,15 @@ backend_prepare() {
         --nosound
         --no3d
         --restrict-namespaces
+        --allusers
+        # --allusers: disable /etc/passwd filtering. Firejail removes UIDs
+        # >= UID_MIN (typically 1000) from /etc/passwd inside the sandbox.
+        # On HPC systems the slurm user often has a UID in that range (e.g.,
+        # from LDAP), causing sbatch to fail when resolving SlurmUser. This
+        # is safe because: /etc/passwd is world-readable anyway, --nonewprivs
+        # prevents setuid escalation, and --whitelist already hides other
+        # users' home directories via tmpfs.
+        #
         # Note: --nogroups is intentionally omitted. HPC file access relies
         # on supplementary group membership (e.g., lab groups for /fh/fast/).
         # Dropping groups would silently break access to group-owned data.
