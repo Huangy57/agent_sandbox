@@ -247,7 +247,7 @@ json.dump(user, sys.stdout, indent=2)
         if [[ -e "$target" && ! -L "$target" && "$target" -nt "$item" ]]; then
             continue
         fi
-        ln -sf "$item" "$target"
+        ln -snf "$item" "$target"
     done
 
     export CLAUDE_CONFIG_DIR="$config_dir"

@@ -273,7 +273,7 @@ echo "4. CLAUDE.md and settings.json overlays"
 
 # Check that CLAUDE_CONFIG_DIR is set inside the sandbox and points
 # to a per-session directory with the merged content.
-if sandbox bash -c 'cat "$CLAUDE_CONFIG_DIR/CLAUDE.md" 2>/dev/null | grep -q "SANDBOX_ACTIVE"'; then
+if sandbox bash -c 'cat "$CLAUDE_CONFIG_DIR/CLAUDE.md" 2>/dev/null | grep -q "Sandbox Environment"'; then
     pass "CLAUDE.md overlay contains sandbox instructions (via CLAUDE_CONFIG_DIR)"
 else
     fail "CLAUDE.md overlay missing sandbox instructions"
