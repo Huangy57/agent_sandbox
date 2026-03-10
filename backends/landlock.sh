@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # backends/landlock.sh — Landlock LSM sandbox backend
 #
 # Provides: backend_available, backend_name, backend_prepare, backend_exec

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # sandbox-lib.sh — Core sandbox library (backend-agnostic)
 #
 # Sourced by sandbox-exec.sh, bwrap-sandbox.sh, sbatch-sandbox.sh, srun-sandbox.sh.

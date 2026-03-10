@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # backends/firejail.sh — Firejail sandbox backend
 #
 # Provides: backend_available, backend_name, backend_prepare, backend_exec

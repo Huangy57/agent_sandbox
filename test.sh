@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # test.sh — Comprehensive test suite for the sandbox
 #
 # Runs from the repo directory or the installed ~/.claude/sandbox/.

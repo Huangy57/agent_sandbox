@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # sandbox-exec.sh — Run a command inside the sandbox (auto-selects backend)
 #
 # Usage:

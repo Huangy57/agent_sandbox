@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # sbatch-sandbox.sh — Submit Slurm jobs that run inside the sandbox
 #
 # Drop-in replacement for sbatch. The job itself executes inside the
@@ -95,7 +95,7 @@ elif [[ -n "$SCRIPT_PATH" ]]; then
     trap "rm -f '$WRAPPER'" EXIT
 
     cat > "$WRAPPER" <<WRAPPER_EOF
-#!/usr/bin/env bash
+#! /bin/bash --
 ${SBATCH_DIRECTIVES}
 
 # --- Sandbox wrapper (auto-generated) ---

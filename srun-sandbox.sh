@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # srun-sandbox.sh — Drop-in srun that wraps commands in the sandbox on the compute node
 #
 # Accepts the same arguments as real srun. Separates srun flags from the

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # backends/bwrap.sh — Bubblewrap sandbox backend
 #
 # Provides: backend_available, backend_name, backend_prepare, backend_exec
@@ -62,7 +62,7 @@ backend_prepare() {
         if [[ -x "/usr/bin/$bin" ]]; then
             local overlay="$SANDBOX_DIR/.${bin}-overlay"
             cat > "$overlay" <<SLURM_EOF
-#!/usr/bin/env bash
+#! /bin/bash --
 exec "$SANDBOX_DIR/${bin}-sandbox.sh" "\$@"
 SLURM_EOF
             chmod +x "$overlay"

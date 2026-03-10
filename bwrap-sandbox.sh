@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#! /bin/bash --
 # bwrap-sandbox.sh — Run a command inside the sandbox
 #
 # Backward-compatible entry point. Delegates to sandbox-exec.sh which
