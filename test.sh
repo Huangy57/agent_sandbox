@@ -713,6 +713,12 @@ if is_bwrap; then
             pass "FILTER_PASSWD: /etc/passwd overlaid (same count — all UIDs may be < 1000)"
         fi
     fi
+    # Slurm service users must be present (sbatch needs to resolve SlurmUser)
+    if sandbox bash -c 'grep -c "^slurm:" /etc/passwd'; then
+        pass "FILTER_PASSWD: slurm user preserved in filtered passwd"
+    else
+        fail "FILTER_PASSWD: slurm user missing from filtered passwd" "$OUTPUT"
+    fi
     if sandbox bash -c 'grep "^passwd:" /etc/nsswitch.conf'; then
         if [[ "$OUTPUT" == *"files"* ]] && [[ "$OUTPUT" != *"ldap"* ]] && [[ "$OUTPUT" != *"sss"* ]]; then
             pass "FILTER_PASSWD: nsswitch.conf uses files-only for passwd"

@@ -184,8 +184,10 @@ generate_filtered_passwd() {
     local my_uid
     my_uid="$(id -u)"
 
-    # Minimal passwd: system accounts (UID < 1000) + current user
-    awk -F: "(\$3 < 1000) || (\$3 == $my_uid)" /etc/passwd > "$tmpdir/passwd"
+    # Minimal passwd: system accounts (UID < 1000) + current user +
+    # service users required by tools available inside the sandbox
+    # (slurm/munge for Slurm commands).
+    awk -F: "(\$3 < 1000) || (\$3 == $my_uid) || (\$1 == \"slurm\") || (\$1 == \"munge\")" /etc/passwd > "$tmpdir/passwd"
 
     # nsswitch.conf: replace ldap/sss/compat with files-only for passwd/group
     if [[ -f /etc/nsswitch.conf ]]; then
