@@ -159,26 +159,22 @@ json.dump(user, sys.stdout, indent=2)
     # Selectively grant /run subdirs — granting all of /run exposes
     # D-Bus and systemd user sockets, allowing full sandbox escape
     # via systemd-run --user (pentest finding, 2026-03).
-    [[ -d /run/munge ]] && LANDLOCK_ARGS+=(--ro /run/munge)
-    [[ -d /run/nscd ]]  && LANDLOCK_ARGS+=(--ro /run/nscd)
+    [[ -d /run/munge ]]            && LANDLOCK_ARGS+=(--ro /run/munge)
+    [[ -d /run/nscd ]]             && LANDLOCK_ARGS+=(--ro /run/nscd)
+    [[ -d /run/systemd/resolve ]]  && LANDLOCK_ARGS+=(--ro /run/systemd/resolve)
 
-    # Read-only home subdirectories (directories only — Landlock rules
-    # apply to directory trees, not individual files)
+    # Read-only home paths (files and directories)
     for subdir in "${HOME_READONLY[@]}"; do
         local full_path="$HOME/$subdir"
-        if [[ -d "$full_path" ]]; then
+        if [[ -e "$full_path" ]]; then
             LANDLOCK_ARGS+=(--ro "$full_path")
         fi
-        # Individual files are handled by their parent directory's rule.
-        # Since $HOME is not in any allowed list, individual dotfiles
-        # like .bashrc are blocked by default. To allow them, users
-        # should ensure they're inside an allowed directory.
     done
 
-    # Writable home subdirectories
+    # Writable home paths (files and directories)
     for subdir in "${HOME_WRITABLE[@]}"; do
         local full_path="$HOME/$subdir"
-        if [[ -d "$full_path" ]]; then
+        if [[ -e "$full_path" ]]; then
             LANDLOCK_ARGS+=(--rw "$full_path")
         fi
     done

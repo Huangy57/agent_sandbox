@@ -306,7 +306,25 @@ def landlock_create_ruleset(handled_access_fs):
     return fd
 
 
-def landlock_add_rule(ruleset_fd, path, access_rights):
+def _is_dir(mode):
+    """Check if a stat mode indicates a directory."""
+    import stat
+    return stat.S_ISDIR(mode)
+
+
+def get_file_access(abi_version):
+    """Access rights applicable to regular files (not directories)."""
+    access = (
+        LANDLOCK_ACCESS_FS_EXECUTE
+        | LANDLOCK_ACCESS_FS_READ_FILE
+        | LANDLOCK_ACCESS_FS_WRITE_FILE
+    )
+    if abi_version >= 3:
+        access |= LANDLOCK_ACCESS_FS_TRUNCATE
+    return access
+
+
+def landlock_add_rule(ruleset_fd, path, access_rights, abi_version=1):
     """Add a path-beneath rule to a Landlock ruleset."""
     try:
         path_fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
@@ -315,6 +333,13 @@ def landlock_add_rule(ruleset_fd, path, access_rights):
         return
 
     try:
+        # For regular files, strip directory-only access rights.
+        # Landlock returns EINVAL if you pass READ_DIR, MAKE_DIR, etc.
+        # for a non-directory path.
+        stat_info = os.fstat(path_fd)
+        if not _is_dir(stat_info.st_mode):
+            access_rights &= get_file_access(abi_version)
+
         # struct landlock_path_beneath_attr {
         #     __u64 allowed_access;
         #     __s32 parent_fd;
@@ -402,11 +427,11 @@ def main():
     # --- Add rules ---
     for path in args.ro:
         # Grant only read + execute, clipped to what the kernel handles
-        landlock_add_rule(ruleset_fd, path, READ_ACCESS & handled)
+        landlock_add_rule(ruleset_fd, path, READ_ACCESS & handled, abi)
 
     for path in args.rw:
         # Grant full access, clipped to what the kernel handles
-        landlock_add_rule(ruleset_fd, path, (READ_ACCESS | write_access) & handled)
+        landlock_add_rule(ruleset_fd, path, (READ_ACCESS | write_access) & handled, abi)
 
     # --- Restrict self ---
     landlock_restrict_self(ruleset_fd)

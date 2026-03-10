@@ -192,6 +192,11 @@ json.dump(user, sys.stdout, indent=2)
         BWRAP_ARGS+=(--ro-bind /run/nscd /run/nscd)
     fi
 
+    # systemd-resolved stub (DNS — /etc/resolv.conf often symlinks here)
+    if [[ -d /run/systemd/resolve ]]; then
+        BWRAP_ARGS+=(--ro-bind /run/systemd/resolve /run/systemd/resolve)
+    fi
+
     if [[ -L /var/run ]]; then
         BWRAP_ARGS+=(--symlink /run /var/run)
     elif [[ -d /var/run ]]; then
