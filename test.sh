@@ -755,10 +755,13 @@ else
 
     if [[ "$_EBPF_LOADED" == "true" ]]; then
         # eBPF is loaded — find the configured token path and test it
-        # Source sandbox.conf to get SANDBOX_BYPASS_TOKEN
+        # Try sandbox.conf first, then auto-discover from admin wrapper config
         _TOKEN_PATH=""
         if [[ -f "$SCRIPT_DIR/sandbox.conf" ]]; then
             _TOKEN_PATH=$(bash -c "source '$SCRIPT_DIR/sandbox.conf' 2>/dev/null; echo \"\$SANDBOX_BYPASS_TOKEN\"")
+        fi
+        if [[ -z "$_TOKEN_PATH" && -f /etc/slurm/sandbox-wrapper.conf ]]; then
+            _TOKEN_PATH=$(bash -c 'source /etc/slurm/sandbox-wrapper.conf 2>/dev/null; echo "$TOKEN_FILE"')
         fi
         if [[ -n "$_TOKEN_PATH" && -f "$_TOKEN_PATH" ]]; then
             # Landlock sets NO_NEW_PRIVS — eBPF should deny the read
@@ -772,7 +775,7 @@ else
                 fi
             fi
         else
-            skip "SANDBOX_BYPASS_TOKEN — eBPF loaded but no token path configured in sandbox.conf"
+            skip "SANDBOX_BYPASS_TOKEN — eBPF loaded but no token path found (sandbox.conf or /etc/slurm/sandbox-wrapper.conf)"
         fi
     else
         skip "SANDBOX_BYPASS_TOKEN — Landlock needs eBPF LSM (not loaded; see ADMIN_HARDENING.md §1)"
