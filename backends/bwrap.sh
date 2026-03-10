@@ -187,8 +187,8 @@ json.dump(user, sys.stdout, indent=2)
 
     # Mount /run as a tmpfs, then selectively bind only what's needed.
     # Mounting all of /run exposes D-Bus, systemd user sockets, and
-    # containerd sockets — allowing full sandbox escape via
-    # systemd-run --user (pentest finding, 2026-03).
+    # containerd sockets — allowing sandbox escape via
+    # systemd-run --user.
     BWRAP_ARGS+=(--tmpfs /run)
 
     # Munge socket (required for Slurm authentication)

@@ -164,9 +164,9 @@ These syscalls are commonly used by GPU compute, MPI multi-rank jobs, and JVM-ba
 
 On nodes where AppArmor blocks unprivileged user namespaces (Ubuntu 24.04+), bwrap cannot work without an admin-created AppArmor profile. [Firejail](https://firejail.wordpress.com/) is now implemented as a third sandbox backend. It installs **setuid root**, so it can create mount namespaces regardless of AppArmor settings. The sandbox auto-detects firejail when bwrap is unavailable (priority: bwrap > firejail > landlock).
 
-Firejail closes the remaining gaps that Landlock alone cannot address. A full penetration test has been conducted — see `findings_firejail.md` for the detailed report (43 tests, 26 blocked, 16 escaped/leaked post-remediation). Key comparison:
+Firejail closes the remaining gaps that Landlock alone cannot address. See `pentest/findings_firejail.md` for the detailed security audit report. Key comparison:
 
-| Gap (pentest finding) | Landlock | Firejail |
+| Gap | Landlock | Firejail |
 |---|---|---|
 | Unix socket `connect()` (D-Bus, snapd, MariaDB) | Cannot block — leaks service info | Mount namespace hides sockets; snapd/systemd-notify/lxd-installer explicitly blacklisted |
 | Host process visibility (`ps aux`) | Shared PID namespace — all host processes visible | PID namespace isolates process list (default) |

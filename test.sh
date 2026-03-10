@@ -633,9 +633,9 @@ print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
     fi
 fi
 
-# ── 9. Pentest hardening (from findings_firejail.md) ──────────────
+# ── 9. Security hardening (advanced) ──────────────────────────────
 
-echo "9. Pentest hardening"
+echo "9. Advanced hardening"
 
 # /tmp isolation — bwrap uses --tmpfs /tmp, firejail uses --private-tmp (configurable)
 # Landlock does not isolate /tmp

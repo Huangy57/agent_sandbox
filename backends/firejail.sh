@@ -204,7 +204,6 @@ json.dump(user, sys.stdout, indent=2)
     #   - /run/user: systemd user sockets (systemd-run --user escape)
     #   - /run/systemd/private: systemd private socket
     #   - /run/containerd: container runtime socket
-    # (pentest finding, 2026-03)
     for _run_danger in \
         /run/dbus /run/user /run/systemd/private /run/containerd \
         /run/snapd.socket /run/snapd-snap.socket \

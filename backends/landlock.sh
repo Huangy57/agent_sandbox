@@ -157,8 +157,8 @@ json.dump(user, sys.stdout, indent=2)
     done
 
     # Selectively grant /run subdirs — granting all of /run exposes
-    # D-Bus and systemd user sockets, allowing full sandbox escape
-    # via systemd-run --user (pentest finding, 2026-03).
+    # D-Bus and systemd user sockets, allowing sandbox escape via
+    # systemd-run --user.
     [[ -d /run/munge ]]            && LANDLOCK_ARGS+=(--ro /run/munge)
     [[ -d /run/nscd ]]             && LANDLOCK_ARGS+=(--ro /run/nscd)
     [[ -d /run/systemd/resolve ]]  && LANDLOCK_ARGS+=(--ro /run/systemd/resolve)
