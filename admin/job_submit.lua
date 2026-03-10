@@ -9,9 +9,29 @@
 -- The token file is readable by normal users but protected from sandboxed
 -- processes via eBPF LSM (denies read when PR_SET_NO_NEW_PRIVS is set).
 -- See ADMIN_HARDENING.md §1.
+--
+-- Reads TOKEN_FILE and SANDBOX_EXEC from sandbox-wrapper.conf (single
+-- source of truth shared with the sbatch/srun wrappers).
 
-local TOKEN_FILE = "/etc/slurm/.sandbox-bypass-token"
-local SANDBOX_EXEC = "/app/sandbox/sandbox-exec.sh"
+-- Parse sandbox-wrapper.conf (KEY="value" or KEY=value, ignoring comments)
+local function read_conf(path)
+    local conf = {}
+    local f = io.open(path, "r")
+    if not f then return conf end
+    for line in f:lines() do
+        local key, val = line:match("^(%w+)%s*=%s*\"(.-)\"")
+        if not key then
+            key, val = line:match("^(%w+)%s*=%s*(%S+)")
+        end
+        if key then conf[key] = val end
+    end
+    f:close()
+    return conf
+end
+
+local conf = read_conf("/etc/slurm/sandbox-wrapper.conf")
+local TOKEN_FILE = conf["TOKEN_FILE"] or "/etc/slurm/.sandbox-bypass-token"
+local SANDBOX_EXEC = conf["SANDBOX_EXEC"] or "/app/sandbox/sandbox-exec.sh"
 
 -- Read the bypass token once (re-read on each submission since Slurm
 -- reloads the script each time).

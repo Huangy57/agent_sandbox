@@ -5,9 +5,9 @@
 # file_open hook, and populates the map with the token file's identity.
 #
 # Usage:
-#   sudo ./load-token-protect.sh [TOKEN_FILE]
+#   sudo ./load-token-protect.sh
 #
-# TOKEN_FILE defaults to /etc/slurm/.sandbox-bypass-token.
+# Reads TOKEN_FILE from sandbox-wrapper.conf (single source of truth).
 #
 # For /etc/rc.local or a systemd unit, use an absolute path:
 #   /path/to/admin/load-token-protect.sh
@@ -17,8 +17,15 @@
 
 set -euo pipefail
 
-TOKEN_FILE="${1:-/etc/slurm/.sandbox-bypass-token}"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Source config — same file the sbatch/srun wrappers use
+if [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
+    source /etc/slurm/sandbox-wrapper.conf
+elif [[ -f "$SCRIPT_DIR/sandbox-wrapper.conf" ]]; then
+    source "$SCRIPT_DIR/sandbox-wrapper.conf"
+fi
+TOKEN_FILE="${TOKEN_FILE:-/etc/slurm/.sandbox-bypass-token}"
 BPF_OBJ="$SCRIPT_DIR/token_protect.bpf.o"
 BPF_PIN="/sys/fs/bpf/token_protect"
 

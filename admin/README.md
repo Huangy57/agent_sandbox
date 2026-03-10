@@ -12,7 +12,7 @@ End-to-end tested on Ubuntu 24.04 (kernel 6.8, Slurm 23.11, Landlock backend) wi
 
 | Source | Deploys to | Purpose |
 |---|---|---|
-| `admin/sandbox-wrapper.conf` | `/etc/slurm/sandbox-wrapper.conf` | Shared configuration — token path, real binary locations, sandbox-exec.sh path |
+| `admin/sandbox-wrapper.conf` | `/etc/slurm/sandbox-wrapper.conf` | Single source of truth — token path, real binary locations, sandbox-exec.sh path |
 | `admin/sbatch-token-wrapper.sh` | `/usr/bin/sbatch` | System-wide sbatch wrapper — auto-injects bypass token; strips manual `_SANDBOX_BYPASS` from CLI |
 | `admin/srun-token-wrapper.sh` | `/usr/bin/srun` | System-wide srun wrapper — passes through for normal users, wraps in sandbox-exec.sh for sandboxed processes |
 | `admin/job_submit.lua` | `/etc/slurm/job_submit.lua` | Slurm job submit plugin — server-side enforcement for sbatch (wraps jobs unless valid token is present) |
@@ -30,9 +30,18 @@ End-to-end tested on Ubuntu 24.04 (kernel 6.8, Slurm 23.11, Landlock backend) wi
 
 ### 1. Generate bypass token
 
+The token must be on a **shared filesystem** accessible from both submit
+nodes (where the wrappers run) and the controller (where `job_submit.lua`
+runs). On clusters where `/etc/slurm/` is node-local, use a shared path
+instead — e.g. alongside the sandbox install under `/app`.
+
+Set `TOKEN_FILE` in `sandbox-wrapper.conf` to the chosen path — all other
+components (wrappers, plugin, loader script) read it from there.
+
 ```bash
-sudo head -c 32 /dev/urandom | base64 > /etc/slurm/.sandbox-bypass-token
-sudo chmod 0644 /etc/slurm/.sandbox-bypass-token
+# Generate the token at the path configured in sandbox-wrapper.conf:
+sudo head -c 32 /dev/urandom | base64 > /app/sandbox/.sandbox-bypass-token
+sudo chmod 0644 /app/sandbox/.sandbox-bypass-token
 ```
 
 ### 2. Build and load the eBPF program
@@ -53,12 +62,14 @@ clang -g -O2 -target bpf \
 bpftool prog loadall token_protect.bpf.o /sys/fs/bpf/token_protect autoattach
 
 # Tell the program which file to protect.
+# Read TOKEN_FILE from sandbox-wrapper.conf (same config the wrappers use):
+source /etc/slurm/sandbox-wrapper.conf
 # stat(2) uses an old dev_t encoding; the kernel's s_dev uses new_encode_dev:
 TOKEN_DEV=$(python3 -c "
-import os; st = os.stat('/etc/slurm/.sandbox-bypass-token')
+import os; st = os.stat('$TOKEN_FILE')
 print((os.major(st.st_dev) << 20) | os.minor(st.st_dev))
 ")
-TOKEN_INO=$(stat -c %i /etc/slurm/.sandbox-bypass-token)
+TOKEN_INO=$(stat -c %i "$TOKEN_FILE")
 MAP_ID=$(bpftool map show | grep protected_file | head -1 | awk '{print $1}' | tr -d ':')
 
 DEV_BYTES=$(python3 -c "import struct; print(' '.join(f'0x{x:02x}' for x in struct.pack('<Q', $TOKEN_DEV)))")
@@ -92,8 +103,8 @@ sudo scontrol reconfigure
 Edit `sandbox-wrapper.conf` to match your environment:
 
 ```bash
-# Edit paths in sandbox-wrapper.conf:
-#   TOKEN_FILE   — path to the bypass token (default: /etc/slurm/.sandbox-bypass-token)
+# Review paths in sandbox-wrapper.conf (all components read from this file):
+#   TOKEN_FILE   — path to the bypass token (set in step 1)
 #   REAL_SBATCH  — where the real sbatch binary will be moved to
 #   REAL_SRUN    — where the real srun binary will be moved to
 #   SANDBOX_EXEC — path to sandbox-exec.sh (used by srun wrapper)
@@ -154,8 +165,10 @@ directly with `prctl(38, 1)`. The plugin logs distinguish "bypass token
 valid" from "wrapping job".
 
 ```bash
+source /etc/slurm/sandbox-wrapper.conf
+
 # 1. eBPF: normal process can read the token
-cat /etc/slurm/.sandbox-bypass-token
+cat "$TOKEN_FILE"
 # → prints the token
 
 # 2. eBPF: process with no_new_privs cannot (simulates any sandbox backend)
@@ -163,7 +176,7 @@ python3 -c "
 import ctypes, sys
 ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)
 try:
-    open('/etc/slurm/.sandbox-bypass-token').read()
+    open('$TOKEN_FILE').read()
     print('FAIL: token was readable', file=sys.stderr); sys.exit(1)
 except PermissionError:
     print('OK: eBPF blocked read (EACCES)')
