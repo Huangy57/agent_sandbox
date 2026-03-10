@@ -91,7 +91,17 @@ SLURM_EOF
 
     BWRAP_ARGS+=(--ro-bind "$SANDBOX_DIR" "$SANDBOX_DIR")
 
+    # If the project dir is under $HOME, bind it BEFORE remount-ro
+    # so bwrap can create the mount point on the writable tmpfs.
+    if [[ "$project_dir" == "$HOME"* ]]; then
+        BWRAP_ARGS+=(--bind "$project_dir" "$project_dir")
+    fi
+
+    BWRAP_ARGS+=(--remount-ro "$HOME")
+
     # --- CLAUDE.md overlay ---
+    # Applied AFTER remount-ro and the rw bind of ~/.claude so the
+    # ro-bind takes precedence over the writable parent mount.
     local claude_md_overlay="$SANDBOX_DIR/.claude-md-overlay"
     local sandbox_snippet="$SANDBOX_DIR/sandbox-claude.md"
     local claude_md_path="$HOME/.claude/CLAUDE.md"
@@ -138,14 +148,6 @@ json.dump(user, sys.stdout, indent=2)
 " "$user_settings_resolved" "$sandbox_settings" > "$settings_overlay"
         BWRAP_ARGS+=(--ro-bind "$settings_overlay" "$user_settings_resolved")
     fi
-
-    # If the project dir is under $HOME, bind it BEFORE remount-ro
-    # so bwrap can create the mount point on the writable tmpfs.
-    if [[ "$project_dir" == "$HOME"* ]]; then
-        BWRAP_ARGS+=(--bind "$project_dir" "$project_dir")
-    fi
-
-    BWRAP_ARGS+=(--remount-ro "$HOME")
 
     for blocked in "${BLOCKED_FILES[@]}"; do
         blocked="${blocked/\$HOME/$HOME}"
