@@ -123,6 +123,8 @@ ln -sf /opt/claude-sandbox ~/.claude/sandbox
 
 The admin controls which paths are visible, which environment variables are blocked, and the Slurm wrapper behavior. Users get sandboxing without managing or misconfiguring policy. The agent cannot tamper with the scripts, sandbox.conf, or Slurm wrappers — even across sessions.
 
+This also fixes the Landlock-specific issue where `~/.claude/CLAUDE.md` and `~/.claude/settings.json` are writable. Since `~/.claude/` must be writable (Claude Code needs it), Landlock's additive-only model cannot make individual files under it read-only. The bwrap backend uses mount overlays for these files, but Landlock cannot. With an admin-owned installation, `sandbox.conf` and the sandbox scripts are protected; the `CLAUDE.md` and `settings.json` overlays remain effective because the in-place swap files are restored on exit.
+
 ### Disable systemd user instances (Landlock nodes)
 
 On nodes using the Landlock backend, there is a critical escape vector: Landlock restricts filesystem access but **cannot block Unix domain socket `connect()`**. This is a fundamental kernel limitation (not available in any Landlock ABI version as of kernel 6.11). A sandboxed process can connect to `/run/user/<UID>/systemd/private` and use `systemd-run --user` to execute commands outside the sandbox — at least 5 independent tools can trigger this (`systemd-run`, `busctl`, `gdbus`, `python3-dbus`, `systemctl --user`).

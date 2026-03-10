@@ -90,6 +90,7 @@ _BLOCKED_SYSCALLS = {
         "userfaultfd":         323,
         "kexec_load":          246,
         "kexec_file_load":     320,
+        "memfd_create":        319,
     },
     AUDIT_ARCH_AARCH64: {
         "io_uring_setup":      425,
@@ -100,6 +101,7 @@ _BLOCKED_SYSCALLS = {
         "userfaultfd":         282,
         "kexec_load":          104,
         "kexec_file_load":     294,
+        "memfd_create":        279,
     },
 }
 
