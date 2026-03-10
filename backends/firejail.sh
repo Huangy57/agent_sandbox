@@ -39,9 +39,9 @@
 #     (io_uring_setup/enter/register). These are blocked by the Landlock
 #     backend's custom seccomp filter but not by firejail 0.9.72.
 #
-# CLAUDE.md/settings.json: uses in-place swap with backup/restore (like landlock)
-#   because --private creates a new tmpfs home. We swap before launching so
-#   the whitelisted ~/.claude/ contains the merged content.
+# CLAUDE.md/settings.json: handled by prepare_config_dir() in sandbox-lib.sh.
+#   CLAUDE_CONFIG_DIR points to a per-session directory with merged config,
+#   so the user's real ~/.claude/ is never modified.
 
 # ── Backend interface ────────────────────────────────────────────
 
@@ -56,132 +56,12 @@ backend_name() {
     echo "firejail"
 }
 
-# Marker injected into modified files so we can distinguish originals from
-# sandbox-modified versions.  Used for idempotent swap/restore on NFS where
-# flock is unreliable and multiple sandboxes may run concurrently.
-_SANDBOX_MARKER="# __SANDBOX_INJECTED_9f3a7c__"
-
-# Per-instance backup key (hostname + PID) — no shared mutable state.
-_FIREJAIL_BACKUPS=()
-_FIREJAIL_INSTANCE_ID="$(hostname -s).$$"
-
-_firejail_has_marker() {
-    [[ -f "$1" ]] && grep -qF "$_SANDBOX_MARKER" "$1"
-}
-
-_firejail_restore() {
-    for entry in "${_FIREJAIL_BACKUPS[@]}"; do
-        local resolved="${entry%%|*}"
-        local mode="${entry##*|}"
-        local backup="${resolved}.sandbox-backup.${_FIREJAIL_INSTANCE_ID}"
-
-        if [[ "$mode" == "created" ]]; then
-            if _firejail_has_marker "$resolved"; then
-                rm -f "$resolved"
-            fi
-        elif [[ -f "$backup" ]]; then
-            if ! _firejail_has_marker "$backup" && _firejail_has_marker "$resolved"; then
-                mv -f "$backup" "$resolved"
-            fi
-        fi
-        rm -f "$backup"
-    done
-    _FIREJAIL_BACKUPS=()
-}
-
-_firejail_swap_file() {
-    local original="$1"
-    local new_content="$2"
-
-    local resolved="$original"
-    if [[ -L "$original" ]]; then
-        resolved="$(readlink -f "$original")"
-    fi
-
-    local backup="${resolved}.sandbox-backup.${_FIREJAIL_INSTANCE_ID}"
-
-    if [[ -f "$resolved" ]]; then
-        cp -f "$resolved" "$backup"
-        if ! _firejail_has_marker "$resolved"; then
-            printf '%s\n# This file was modified by the sandbox. Your original is at:\n#   %s\n# It will be restored automatically when the sandbox exits.\n\n%s\n' \
-                "$_SANDBOX_MARKER" "$backup" "$new_content" > "$resolved"
-        fi
-        _FIREJAIL_BACKUPS+=("${resolved}|existing")
-    elif [[ -n "$new_content" ]]; then
-        mkdir -p "$(dirname "$resolved")"
-        printf '%s\n# This file was created by the sandbox and will be removed on exit.\n\n%s\n' \
-            "$_SANDBOX_MARKER" "$new_content" > "$resolved"
-        _FIREJAIL_BACKUPS+=("${resolved}|created")
-    fi
-}
-
 backend_prepare() {
     local project_dir="$1"
     _FIREJAIL_PROJECT_DIR="$project_dir"
 
-    # Set up restore trap
-    trap '_firejail_restore' EXIT INT TERM
-
-    # --- Restore stale backups from a previous crash ---
-    for target in "$HOME/.claude/CLAUDE.md" "$HOME/.claude/settings.json"; do
-        for f in "${target}".sandbox-backup.*; do
-            [[ -f "$f" ]] || continue
-            if ! _firejail_has_marker "$f" && _firejail_has_marker "$target"; then
-                echo "Warning: Restoring stale backup from previous crash" >&2
-                mv -f "$f" "$target"
-            else
-                rm -f "$f"
-            fi
-        done
-    done
-
-    # --- CLAUDE.md overlay (in-place swap) ---
-    local sandbox_snippet="$SANDBOX_DIR/sandbox-claude.md"
-    local claude_md_path="$HOME/.claude/CLAUDE.md"
-
-    if [[ -f "$sandbox_snippet" ]]; then
-        local claude_md_resolved="$claude_md_path"
-        [[ -L "$claude_md_path" ]] && claude_md_resolved="$(readlink -f "$claude_md_path")"
-
-        local merged=""
-        if [[ -f "$claude_md_resolved" ]]; then
-            merged="$(cat "$claude_md_resolved")"
-        fi
-        merged="${merged}
-$(cat "$sandbox_snippet")"
-        _firejail_swap_file "$claude_md_path" "$merged"
-    fi
-
-    # --- Settings overlay (in-place swap) ---
-    local sandbox_settings="$SANDBOX_DIR/sandbox-settings.json"
-    local user_settings="$HOME/.claude/settings.json"
-
-    if [[ -f "$sandbox_settings" ]]; then
-        local user_settings_resolved="$user_settings"
-        [[ -L "$user_settings" ]] && user_settings_resolved="$(readlink -f "$user_settings")"
-
-        [[ -f "$user_settings_resolved" ]] || echo '{}' > "$user_settings_resolved"
-
-        local merged_settings
-        merged_settings=$(python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        user = json.load(f)
-except (ValueError, IOError):
-    user = {}
-with open(sys.argv[2]) as f:
-    sandbox = json.load(f)
-user.setdefault('permissions', {})
-existing = user['permissions'].get('allow', [])
-for rule in sandbox.get('permissions', {}).get('allow', []):
-    if rule not in existing:
-        existing.append(rule)
-user['permissions']['allow'] = existing
-json.dump(user, sys.stdout, indent=2)
-" "$user_settings_resolved" "$sandbox_settings")
-        _firejail_swap_file "$user_settings" "$merged_settings"
-    fi
+    # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
+    # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
 
     # --- Build firejail arguments ---
     FIREJAIL_ARGS=(
@@ -361,10 +241,7 @@ json.dump(user, sys.stdout, indent=2)
 
 backend_exec() {
     firejail "${FIREJAIL_ARGS[@]}" -- "$@"
-    local rc=$?
-    _firejail_restore
-    trap - EXIT INT TERM
-    exit $rc
+    exit $?
 }
 
 backend_dry_run() {

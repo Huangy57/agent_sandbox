@@ -329,9 +329,8 @@ Layer 2: Blank tmpfs home               hides EVERYTHING under $HOME
 Layer 3: Selective re-mount (read-only) ~/.bashrc, ~/.gitconfig, ...
 Layer 4: Writable mounts                ~/.claude, project directory
 Layer 5: Slurm binary relocation        /usr/bin/sbatch → sandbox redirector
-Layer 6: CLAUDE.md + settings overlays  merged with sandbox instructions
-Layer 7: NFS storage (read-only)        /shared/lab_data → entire tree
-Layer 8: Project dir (writable overlay) writable on top of Layer 7
+Layer 6: NFS storage (read-only)        /shared/lab_data → entire tree
+Layer 7: Project dir (writable overlay) writable on top of Layer 6
 ```
 
 **firejail (setuid sandbox):**
@@ -402,7 +401,7 @@ The wrappers pass all flags through unchanged and call the real Slurm binaries i
 
 ## Agent Awareness (CLAUDE.md)
 
-The sandbox automatically injects instructions into the agent's `CLAUDE.md` — **without modifying your actual CLAUDE.md file**. With bwrap, a merged copy is overlaid via mount namespace. With firejail and landlock, the file is swapped in-place at startup and restored on exit. A refcount ensures concurrent sandboxes share the backup correctly — the original is only restored when the last sandbox exits. Crash recovery detects stale backups with no active sandboxes. Outside the sandbox, your CLAUDE.md is completely unchanged.
+The sandbox automatically injects instructions into the agent's `CLAUDE.md` — **without modifying your actual CLAUDE.md file**. On each sandbox start, `~/.claude/sandbox-config/` is rebuilt with a merged `CLAUDE.md` and `settings.json`, and `CLAUDE_CONFIG_DIR` is set so Claude Code reads from there instead of `~/.claude/` directly. Everything else in `~/.claude/` is symlinked through, so sessions, projects, and other state work normally.
 
 This means the agent:
 

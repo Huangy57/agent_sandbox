@@ -143,6 +143,99 @@ validate_project_dir() {
     return 1
 }
 
+# ── Config directory overlay ──────────────────────────────────────
+#
+# Creates a sandbox config directory with merged CLAUDE.md and
+# settings.json, then sets CLAUDE_CONFIG_DIR so Claude Code uses it
+# instead of the real config dir.  This is backend-independent and
+# eliminates in-place file swapping entirely.
+#
+# Respects an existing CLAUDE_CONFIG_DIR (reads from it, places
+# sandbox-config/ inside it).  Refuses to nest if already sandboxed.
+#
+# Layout:  <config-dir>/sandbox-config/
+#            CLAUDE.md       — user's original + sandbox snippet
+#            settings.json   — user's settings + sandbox permissions
+#            *               — symlinks to everything else
+#
+# The directory is rebuilt on every sandbox start. Concurrent sandboxes
+# all write the same merged content, so a single shared dir is fine.
+
+prepare_config_dir() {
+    # --- Prevent nesting ---
+    if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
+        echo "Error: Already inside a sandbox (SANDBOX_ACTIVE=1). Nesting is not supported." >&2
+        exit 1
+    fi
+
+    # --- Determine the real config directory ---
+    # Honour an existing CLAUDE_CONFIG_DIR; default to ~/.claude
+    local real_claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+    local config_dir="$real_claude_dir/sandbox-config"
+    mkdir -p "$config_dir"
+
+    # --- Merge CLAUDE.md ---
+    local sandbox_snippet="$SANDBOX_DIR/sandbox-claude.md"
+    local user_claude_md="$real_claude_dir/CLAUDE.md"
+    {
+        if [[ -f "$user_claude_md" ]]; then
+            # Strip any stale sandbox injection from a previous in-place backend
+            sed '/^# __SANDBOX_INJECTED_9f3a7c__$/,/^$/d' "$user_claude_md"
+        fi
+        if [[ -f "$sandbox_snippet" ]]; then
+            cat "$sandbox_snippet"
+        fi
+    } > "$config_dir/CLAUDE.md"
+
+    # --- Merge settings.json ---
+    local sandbox_settings="$SANDBOX_DIR/sandbox-settings.json"
+    local user_settings="$real_claude_dir/settings.json"
+
+    if [[ -f "$sandbox_settings" ]]; then
+        [[ -f "$user_settings" ]] || echo '{}' > "$user_settings"
+        python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        user = json.load(f)
+except (ValueError, IOError):
+    user = {}
+with open(sys.argv[2]) as f:
+    sandbox = json.load(f)
+user.setdefault('permissions', {})
+existing = user['permissions'].get('allow', [])
+for rule in sandbox.get('permissions', {}).get('allow', []):
+    if rule not in existing:
+        existing.append(rule)
+user['permissions']['allow'] = existing
+json.dump(user, sys.stdout, indent=2)
+" "$user_settings" "$sandbox_settings" > "$config_dir/settings.json"
+    elif [[ -f "$user_settings" ]]; then
+        cp "$user_settings" "$config_dir/settings.json"
+    fi
+
+    # --- Symlink everything else ---
+    for item in "$real_claude_dir"/*; do
+        local name
+        name="$(basename "$item")"
+        case "$name" in
+            CLAUDE.md|settings.json|sandbox-config) continue ;;
+        esac
+        [[ "$name" == *.sandbox-backup.* ]] && continue
+        ln -sf "$item" "$config_dir/$name"
+    done
+
+    for item in "$real_claude_dir"/.*; do
+        local name
+        name="$(basename "$item")"
+        [[ "$name" == "." || "$name" == ".." ]] && continue
+        ln -sf "$item" "$config_dir/$name"
+    done
+
+    export CLAUDE_CONFIG_DIR="$config_dir"
+}
+
 # ── Backend detection ───────────────────────────────────────────
 
 # SANDBOX_BACKEND can be set in sandbox.conf or environment.
@@ -249,6 +342,7 @@ build_bwrap_args() {
         detect_backend
         _BACKEND_DETECTED=true
     fi
+    prepare_config_dir
     backend_prepare "$1"
 }
 

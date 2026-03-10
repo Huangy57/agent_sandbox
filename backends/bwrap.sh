@@ -106,55 +106,8 @@ SLURM_EOF
 
     BWRAP_ARGS+=(--remount-ro "$HOME")
 
-    # --- CLAUDE.md overlay ---
-    # Applied AFTER remount-ro and the rw bind of ~/.claude so the
-    # ro-bind takes precedence over the writable parent mount.
-    local claude_md_overlay="$SANDBOX_DIR/.claude-md-overlay"
-    local sandbox_snippet="$SANDBOX_DIR/sandbox-claude.md"
-    local claude_md_path="$HOME/.claude/CLAUDE.md"
-    local claude_md_resolved="$claude_md_path"
-    if [[ -L "$claude_md_path" ]]; then
-        claude_md_resolved="$(readlink -f "$claude_md_path")"
-    fi
-    if [[ -f "$sandbox_snippet" ]]; then
-        {
-            if [[ -f "$claude_md_resolved" ]]; then
-                cat "$claude_md_resolved"
-            fi
-            cat "$sandbox_snippet"
-        } > "$claude_md_overlay"
-        BWRAP_ARGS+=(--ro-bind "$claude_md_overlay" "$claude_md_resolved")
-    fi
-
-    # --- Settings overlay ---
-    local settings_overlay="$SANDBOX_DIR/.settings-overlay"
-    local sandbox_settings="$SANDBOX_DIR/sandbox-settings.json"
-    local user_settings="$HOME/.claude/settings.json"
-    local user_settings_resolved="$user_settings"
-    if [[ -L "$user_settings" ]]; then
-        user_settings_resolved="$(readlink -f "$user_settings")"
-    fi
-    if [[ -f "$sandbox_settings" ]]; then
-        [[ -f "$user_settings_resolved" ]] || echo '{}' > "$user_settings_resolved"
-        python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        user = json.load(f)
-except (ValueError, IOError):
-    user = {}
-with open(sys.argv[2]) as f:
-    sandbox = json.load(f)
-user.setdefault('permissions', {})
-existing = user['permissions'].get('allow', [])
-for rule in sandbox.get('permissions', {}).get('allow', []):
-    if rule not in existing:
-        existing.append(rule)
-user['permissions']['allow'] = existing
-json.dump(user, sys.stdout, indent=2)
-" "$user_settings_resolved" "$sandbox_settings" > "$settings_overlay"
-        BWRAP_ARGS+=(--ro-bind "$settings_overlay" "$user_settings_resolved")
-    fi
+    # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
+    # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
 
     for blocked in "${BLOCKED_FILES[@]}"; do
         blocked="${blocked/\$HOME/$HOME}"

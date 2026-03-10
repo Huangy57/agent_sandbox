@@ -85,6 +85,7 @@ if [[ ${#USER_CMD[@]} -eq 0 ]]; then
 fi
 
 detect_backend
+prepare_config_dir
 backend_prepare "$PROJECT_DIR"
 
 if [[ "$SANDBOX_BACKEND" == "bwrap" ]]; then

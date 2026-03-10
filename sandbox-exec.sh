@@ -102,6 +102,9 @@ fi
 detect_backend
 _BACKEND_DETECTED=true
 
+# Create per-session config directory (backend-independent)
+prepare_config_dir
+
 # Prepare sandbox
 backend_prepare "$PROJECT_DIR"
 

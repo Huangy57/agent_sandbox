@@ -265,64 +265,41 @@ fi
 echo ""
 
 # ── 4. CLAUDE.md and settings.json overlays ──────────────────────
+# prepare_config_dir() creates ~/.claude/sandbox-config/ with merged
+# CLAUDE.md and settings.json, and sets CLAUDE_CONFIG_DIR so Claude Code
+# reads from there instead of ~/.claude/ directly.
 
 echo "4. CLAUDE.md and settings.json overlays"
 
+# Check that CLAUDE_CONFIG_DIR is set inside the sandbox and points
+# to a per-session directory with the merged content.
+if sandbox bash -c 'cat "$CLAUDE_CONFIG_DIR/CLAUDE.md" 2>/dev/null | grep -q "SANDBOX_ACTIVE"'; then
+    pass "CLAUDE.md overlay contains sandbox instructions (via CLAUDE_CONFIG_DIR)"
+else
+    fail "CLAUDE.md overlay missing sandbox instructions"
+fi
+
+if sandbox bash -c 'cat "$CLAUDE_CONFIG_DIR/settings.json" 2>/dev/null | grep -q "Bash"'; then
+    pass "settings.json overlay contains sandbox permissions (via CLAUDE_CONFIG_DIR)"
+else
+    fail "settings.json overlay missing sandbox permissions"
+fi
+
+# Verify the user's real CLAUDE.md was NOT modified
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
-if [[ -e "$CLAUDE_MD" ]]; then
-    CLAUDE_MD_RESOLVED="$CLAUDE_MD"
-    if [[ -L "$CLAUDE_MD" ]]; then
-        CLAUDE_MD_RESOLVED="$(readlink -f "$CLAUDE_MD")"
-    fi
-
-    if sandbox bash -c "cat '$CLAUDE_MD_RESOLVED' 2>/dev/null | grep -q 'SANDBOX_ACTIVE'"; then
-        pass "CLAUDE.md overlay contains sandbox instructions"
+if [[ -f "$CLAUDE_MD" ]]; then
+    if grep -q '__SANDBOX_INJECTED_9f3a7c__' "$CLAUDE_MD" 2>/dev/null; then
+        fail "User's real CLAUDE.md was modified (should be untouched)"
     else
-        fail "CLAUDE.md overlay missing sandbox instructions" "$OUTPUT"
+        pass "User's real CLAUDE.md is untouched"
     fi
+fi
+
+# Verify CLAUDE_CONFIG_DIR points to the sandbox-config directory
+if sandbox bash -c '[[ "$CLAUDE_CONFIG_DIR" == *sandbox-config ]]'; then
+    pass "CLAUDE_CONFIG_DIR points to sandbox-config directory"
 else
-    skip "CLAUDE.md not found — overlay test"
-fi
-
-SETTINGS="$HOME/.claude/settings.json"
-if [[ -e "$SETTINGS" ]]; then
-    SETTINGS_RESOLVED="$SETTINGS"
-    if [[ -L "$SETTINGS" ]]; then
-        SETTINGS_RESOLVED="$(readlink -f "$SETTINGS")"
-    fi
-
-    if sandbox bash -c "cat '$SETTINGS_RESOLVED' 2>/dev/null | grep -q 'Bash'"; then
-        pass "settings.json overlay contains sandbox permissions"
-    else
-        fail "settings.json overlay missing sandbox permissions" "$OUTPUT"
-    fi
-else
-    skip "settings.json not found — overlay test"
-fi
-
-if [[ -L "$CLAUDE_MD" ]]; then
-    pass "CLAUDE.md is a symlink — overlay handled correctly (sandbox started)"
-fi
-if [[ -L "$SETTINGS" ]]; then
-    pass "settings.json is a symlink — overlay handled correctly (sandbox started)"
-fi
-
-# Landlock/firejail: verify backup was restored after sandbox exit
-if is_landlock || is_firejail; then
-    # Per-instance backups use .sandbox-backup.<hostname>.<pid> naming
-    local stale_claude stale_settings
-    stale_claude=$(ls "${CLAUDE_MD}".sandbox-backup.* 2>/dev/null | head -1)
-    stale_settings=$(ls "${SETTINGS}".sandbox-backup.* 2>/dev/null | head -1)
-    if [[ -e "$CLAUDE_MD" && -z "$stale_claude" ]]; then
-        pass "CLAUDE.md backup was cleaned up after sandbox exit"
-    elif [[ -e "$CLAUDE_MD" ]]; then
-        fail "CLAUDE.md backup was not cleaned up"
-    fi
-    if [[ -e "$SETTINGS" && -z "$stale_settings" ]]; then
-        pass "settings.json backup was cleaned up after sandbox exit"
-    elif [[ -e "$SETTINGS" ]]; then
-        fail "settings.json backup was not cleaned up"
-    fi
+    fail "CLAUDE_CONFIG_DIR not set correctly"
 fi
 
 echo ""
