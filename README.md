@@ -52,7 +52,7 @@ With **bwrap**, even calling `/usr/bin/sbatch` by absolute path hits the sandbox
 
 - Linux HPC with Slurm (kernel ≥ 3.8)
 - **Bubblewrap backend**: requires `kernel.unprivileged_userns_clone = 1` and [Homebrew](https://brew.sh/) for installation. On Ubuntu 24.04+, AppArmor may also need configuration — see [Troubleshooting](#setting-up-uid-map-permission-denied-ubuntu-2404).
-- **Firejail backend**: requires `firejail` installed with setuid root (`sudo apt install firejail`). Works when AppArmor blocks unprivileged user namespaces (which breaks bwrap). See [Known Limitations](#known-limitations) for the `/etc/passwd` UID filtering issue.
+- **Firejail backend**: requires `firejail` installed with setuid root (`sudo apt install firejail`). Works when AppArmor blocks unprivileged user namespaces (which breaks bwrap).
 - **Landlock backend**: requires kernel ≥ 5.13 (Ubuntu 22.04+). Works without root, even when AppArmor blocks user namespaces. No Homebrew needed — uses Python 3 only.
 
 ### One-Command Setup
@@ -440,7 +440,7 @@ Replace `/path/to/bwrap` with the output of `which bwrap`. Then run `sudo apparm
 **Option 2 — Disable globally:** `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist with `/etc/sysctl.d/99-userns.conf`).
 
 ### Firejail: Slurm "sbatch: error: ... Invalid user id"
-Firejail filters `/etc/passwd`, removing users with UIDs in the dynamic allocation range (~1000–64999 except the current user). If the `slurm` user has a high UID (e.g., 64030), sbatch fails because it can't resolve `SlurmUser`. Fix: assign slurm a system-range UID: `sudo usermod -u 120 slurm && sudo groupmod -g 120 slurm`.
+This was caused by firejail's `/etc/passwd` filtering, which removes UIDs >= `UID_MIN`. The sandbox now uses `--allusers` to disable this filtering, so this issue should no longer occur. If you still see it, ensure you're running the latest version of the sandbox scripts.
 
 ### Slurm commands fail with "Authentication error"
 The munge socket at `/run/munge/` must be accessible. Bwrap binds `/run` by default. Firejail allows `/run/munge` but blacklists `/run/dbus` and `/run/user`. If you're on a non-standard setup, check that `/run/munge/munge.socket.2` exists.
@@ -494,7 +494,7 @@ Add `bpf` to the kernel boot parameters: `lsm=landlock,lockdown,yama,integrity,a
 | Tool | Available? | Pros | Cons |
 |---|---|---|---|
 | **[Bubblewrap](https://github.com/containers/bubblewrap)** | ✅ Yes (Homebrew) | Mount namespace isolation, paths hidden entirely (ENOENT), file overlays, Slurm binary relocation, sandbox self-protection | Requires unprivileged user namespaces; blocked by AppArmor on Ubuntu 24.04+ without admin help |
-| **[Firejail](https://firejail.wordpress.com/)** | ✅ Yes (`apt install`) | Mount namespace (ENOENT), PID namespace, built-in seccomp, caps dropping, works when AppArmor blocks user namespaces | Requires setuid root binary; filters `/etc/passwd` (may break Slurm if slurm UID is in dynamic range); default seccomp doesn't block io_uring |
+| **[Firejail](https://firejail.wordpress.com/)** | ✅ Yes (`apt install`) | Mount namespace (ENOENT), PID namespace, built-in seccomp, caps dropping, works when AppArmor blocks user namespaces | Requires setuid root binary; default seccomp doesn't block io_uring |
 | **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** | ✅ Yes (kernel ≥ 5.13) | No root or admin needed, works on Ubuntu 24.04 despite AppArmor, pure kernel LSM, no external dependencies (Python 3 only) | No mount namespace — blocked paths return EACCES not ENOENT, no file overlays, no PID isolation, no Slurm binary relocation, no sandbox self-protection, cannot block Unix socket connect (see [Admin Hardening](ADMIN_HARDENING.md)) |
 | **[Apptainer/Singularity](https://apptainer.org/)** | ✅ Yes (lmod) | Full container, HPC-native | Heavy — requires container images, path mapping |
 | **Docker** | ❌ No | Industry standard | Requires root daemon; not available on shared HPC |
@@ -509,7 +509,6 @@ The sandbox auto-detects the best available backend (bwrap → firejail → land
 
 | Backend | Limitation | Mitigation |
 |---|---|---|
-| **Firejail** | Filters `/etc/passwd`, removing UIDs in dynamic range (~1000–64999). Breaks Slurm if `slurm` user has high UID. | Assign slurm a system UID: `sudo usermod -u 120 slurm` |
 | **Firejail** | Default seccomp (v0.9.72) doesn't block `io_uring_setup`/`enter`/`register` | Landlock backend's custom seccomp does block these |
 | **bwrap/Firejail** | `/tmp` isolated by default (`PRIVATE_TMP=true`) — breaks MPI shared-memory transport and NCCL inter-GPU sockets | Set `PRIVATE_TMP=false` in `sandbox.conf` for HPC multi-process workloads |
 | **Landlock** | Seccomp allows `memfd_create`, `userfaultfd`, `process_vm_readv/writev` for HPC compatibility | Accepted trade-off — these are needed by CUDA, MPI, and Java GC. See [Admin Hardening](ADMIN_HARDENING.md) |
