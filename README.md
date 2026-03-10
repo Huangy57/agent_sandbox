@@ -515,4 +515,5 @@ The sandbox auto-detects the best available backend (bwrap → firejail → land
 | **Landlock** | Cannot block `AF_UNIX connect()` — agent can reach D-Bus, systemd sockets | Use bwrap or firejail; or see [Admin Hardening](ADMIN_HARDENING.md) |
 | **Landlock** | No sandbox self-protection — agent can modify wrapper scripts | Current session is safe (kernel rules are irrevocable), but future sessions could be affected |
 | **All** | `/dev/shm` is writable and shared (IPC namespace not isolated by default) — could be used for covert cross-sandbox communication | `firejail --ipc-namespace`, `bwrap --unshare-ipc` |
+| **All** | User enumeration via LDAP/AD — `getent passwd` reveals all users on the directory (not just `/etc/passwd`) | See [Admin Hardening](ADMIN_HARDENING.md) for nsswitch overlay approach (bwrap/firejail only) |
 | **All** | Network not isolated — agent can make HTTP requests, SSH connections | Do not expose `~/.ssh`; consider network policy at admin level |
