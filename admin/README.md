@@ -34,7 +34,34 @@ sudo head -c 32 /dev/urandom | base64 > /etc/slurm/.sandbox-bypass-token
 sudo chmod 0644 /etc/slurm/.sandbox-bypass-token
 ```
 
-### 2. Deploy the job submit plugin
+### 2. Build and load the eBPF program
+
+Load this **before** deploying the wrappers — otherwise sandboxed processes
+can still read the token until the eBPF is active.
+
+```bash
+# Generate BTF header
+sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+
+# Compile (adjust -D__TARGET_ARCH_ for your platform)
+clang -g -O2 -target bpf -D__TARGET_ARCH_$(uname -m | sed 's/x86_64/x86/;s/aarch64/arm64/') \
+    -I. -I/usr/include/bpf \
+    -c token_protect.bpf.c -o token_protect.bpf.o
+
+# Load and auto-attach to the LSM file_open hook
+sudo bpftool prog loadall token_protect.bpf.o /sys/fs/bpf/token_protect autoattach
+
+# Set the protected inode
+TOKEN_INO=$(stat -c %i /etc/slurm/.sandbox-bypass-token)
+MAP_ID=$(sudo bpftool map show | grep protected_inode | awk '{print $1}' | tr -d ':')
+BYTES=$(python3 -c "import struct; print(' '.join(f'0x{x:02x}' for x in struct.pack('<Q', $TOKEN_INO)))")
+sudo bpftool map update id $MAP_ID key 0x00 0x00 0x00 0x00 value $BYTES
+```
+
+To persist across reboots, add the load/attach commands to a systemd unit or
+`/etc/rc.local`.
+
+### 3. Deploy the job submit plugin
 
 ```bash
 # Edit SANDBOX_EXEC in job_submit.lua to match your sandbox install path
@@ -46,7 +73,10 @@ sudo cp job_submit.lua /etc/slurm/job_submit.lua
 sudo scontrol reconfigure
 ```
 
-### 3. Configure and deploy the Slurm wrappers
+### 4. Configure and deploy the Slurm wrappers
+
+Deploy the wrappers **last** — they depend on both the eBPF (step 2) and
+the plugin (step 3) being active.
 
 First, edit `sandbox-wrapper.conf` to match your environment:
 
@@ -74,30 +104,6 @@ sudo chmod +x /usr/bin/sbatch /usr/bin/srun
 This ensures every `sbatch`/`srun` call goes through the wrappers — whether
 by name, absolute path, or from scripts. The wrappers find the real binaries
 at the `REAL_SBATCH`/`REAL_SRUN` paths configured in `sandbox-wrapper.conf`.
-
-### 4. Build and load the eBPF program
-
-```bash
-# Generate BTF header
-sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
-
-# Compile (adjust -D__TARGET_ARCH_ for your platform)
-clang -g -O2 -target bpf -D__TARGET_ARCH_$(uname -m | sed 's/x86_64/x86/;s/aarch64/arm64/') \
-    -I. -I/usr/include/bpf \
-    -c token_protect.bpf.c -o token_protect.bpf.o
-
-# Load and auto-attach to the LSM file_open hook
-sudo bpftool prog loadall token_protect.bpf.o /sys/fs/bpf/token_protect autoattach
-
-# Set the protected inode
-TOKEN_INO=$(stat -c %i /etc/slurm/.sandbox-bypass-token)
-MAP_ID=$(sudo bpftool map show | grep protected_inode | awk '{print $1}' | tr -d ':')
-BYTES=$(python3 -c "import struct; print(' '.join(f'0x{x:02x}' for x in struct.pack('<Q', $TOKEN_INO)))")
-sudo bpftool map update id $MAP_ID key 0x00 0x00 0x00 0x00 value $BYTES
-```
-
-To persist across reboots, add the load/attach commands to a systemd unit or
-`/etc/rc.local`.
 
 ## How it works
 

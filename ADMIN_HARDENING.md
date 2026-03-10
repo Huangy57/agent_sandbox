@@ -61,20 +61,21 @@ The eBPF program is only needed on nodes that use the Landlock backend, where th
 ### Setup
 
 ```bash
-# Generate a bypass token
+# 1. Generate a bypass token
 head -c 32 /dev/urandom | base64 > /etc/slurm/.sandbox-bypass-token
 chmod 0644 /etc/slurm/.sandbox-bypass-token
 
-# Install the job submit plugin (see admin/job_submit.lua for a
-# working example). Edit SANDBOX_EXEC path to match your install.
-cp admin/job_submit.lua /etc/slurm/job_submit.lua
+# 2. Build and load eBPF LSM program — must be active BEFORE deploying
+#    the wrappers (see admin/token_protect.bpf.c and admin/README.md)
 
-# Enable in slurm.conf:
-#   JobSubmitPlugins=lua
+# 3. Install the job submit plugin (see admin/job_submit.lua for a
+#    working example). Edit SANDBOX_EXEC path to match your install.
+cp admin/job_submit.lua /etc/slurm/job_submit.lua
+# Enable in slurm.conf:  JobSubmitPlugins=lua
 # Then: scontrol reconfigure
 
-# Install system-wide sbatch/srun wrappers — auto-inject the token
-# for non-sandboxed users (transparent, no workflow change).
+# 4. Install system-wide sbatch/srun wrappers (deploy last — depends
+#    on eBPF and plugin being active).
 mkdir -p /usr/libexec/slurm
 mv /usr/bin/sbatch /usr/libexec/slurm/sbatch
 mv /usr/bin/srun /usr/libexec/slurm/srun
@@ -82,9 +83,6 @@ cp admin/sbatch-token-wrapper.sh /usr/bin/sbatch
 cp admin/srun-token-wrapper.sh /usr/bin/srun
 cp admin/sandbox-wrapper.conf /etc/slurm/sandbox-wrapper.conf
 chmod +x /usr/bin/sbatch /usr/bin/srun
-
-# Build and load eBPF LSM program (see admin/token_protect.bpf.c
-# and admin/README.md for build instructions)
 ```
 
 Working examples are provided in `admin/`:
