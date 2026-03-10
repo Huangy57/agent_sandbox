@@ -35,7 +35,7 @@ function slurm_job_submit(job_desc, part_list, submit_uid)
     if expected and job_desc.environment then
         local provided = job_desc.environment["_SANDBOX_BYPASS"]
         if provided == expected then
-            slurm.log_info("job_submit/sandbox: uid %d provided valid bypass token", submit_uid)
+            slurm.log_info("job_submit/sandbox: uid %d bypass token valid", submit_uid)
             -- Clear the token from the job environment so it doesn't
             -- leak into the compute node. Use empty string because
             -- Slurm's Lua environment table does not support nil deletion.

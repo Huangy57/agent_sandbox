@@ -131,32 +131,42 @@ sandboxes the job), srun wraps the command in the sandbox directly.
 
 ## Verification
 
+No job submission required. The eBPF checks a single kernel property —
+`PR_SET_NO_NEW_PRIVS` — which all sandbox backends set. We simulate it
+directly with `prctl(38, 1)`. The plugin logs distinguish "bypass token
+valid" from "wrapping job".
+
 ```bash
-# 1. eBPF token protection — normal process can read the token
-cat /etc/slurm/.sandbox-bypass-token          # succeeds
+# 1. eBPF: normal process can read the token
+cat /etc/slurm/.sandbox-bypass-token
+# → prints the token
 
-# 2. eBPF token protection — sandboxed (no_new_privs) process cannot
+# 2. eBPF: process with no_new_privs cannot (simulates any sandbox backend)
 python3 -c "
-import ctypes
-ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)      # PR_SET_NO_NEW_PRIVS
-open('/etc/slurm/.sandbox-bypass-token').read()
-"  # raises PermissionError (EACCES)
+import ctypes, sys
+ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)
+try:
+    open('/etc/slurm/.sandbox-bypass-token').read()
+    print('FAIL: token was readable', file=sys.stderr); sys.exit(1)
+except PermissionError:
+    print('OK: eBPF blocked read (EACCES)')
+"
 
-# 3. Normal user: sbatch runs unsandboxed (wrapper auto-injects token)
-sbatch --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
-# output: SANDBOX_ACTIVE=  (empty — not sandboxed, no workflow change)
+# 3. Normal user sbatch: plugin sees valid token (--test-only, no queuing)
+sbatch --test-only --wrap='echo hello'
+sudo grep 'job_submit/sandbox' /var/log/slurm/slurmctld.log | tail -1
+# → "bypass token valid"
 
-# 4. Normal user: srun runs unsandboxed (wrapper passes through)
-srun echo "SANDBOX_ACTIVE=$SANDBOX_ACTIVE"
-# output: SANDBOX_ACTIVE=  (empty — not sandboxed, no workflow change)
+# 4. Simulated sandboxed sbatch: plugin wraps the job
+python3 -c "
+import ctypes, subprocess
+ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)
+subprocess.run(['sbatch', '--test-only', '--wrap=echo hello'])
+"
+sudo grep 'job_submit/sandbox' /var/log/slurm/slurmctld.log | tail -1
+# → "wrapping job from uid ..."
 
-# 5. Sandboxed process: sbatch/srun get sandboxed (wrapper can't read token)
-# (from inside sandbox-exec.sh — e.g., an agent session)
-sandbox-exec.sh -- bash -c 'sbatch --wrap="echo SANDBOX_ACTIVE=\$SANDBOX_ACTIVE" -o /tmp/test-%j.out'
-# output: SANDBOX_ACTIVE=1  (sandboxed)
-
-# 6. Manual --export=_SANDBOX_BYPASS is stripped by the sbatch wrapper
-sbatch --export=ALL,_SANDBOX_BYPASS="wrong" \
-    --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
-# output: SANDBOX_ACTIVE=  (wrapper stripped it, injected real token)
+# 5. srun works normally for non-sandboxed users
+srun --help | head -1
+# → shows real srun help (wrapper passed through)
 ```
