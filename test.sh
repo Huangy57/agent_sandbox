@@ -976,6 +976,83 @@ if [[ ${#AVAILABLE_BACKENDS[@]} -gt 1 || -n "$WRAPPER_CONF" ]]; then
     echo "╚═══════════════════════════════════════════════╝"
 fi
 
+# ── Admin hardening status (ADMIN_HARDENING.md) ──────────────────
+
+echo ""
+echo "Admin hardening status (see ADMIN_HARDENING.md):"
+
+# §1 — Enforce sandbox on agent-submitted Slurm jobs
+_s1_parts=()
+_s1_missing=()
+
+# Token file exists?
+_token_path=""
+if [[ -n "${TOKEN_FILE:-}" ]]; then
+    _token_path="$TOKEN_FILE"
+elif [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
+    _token_path=$(bash -c 'source /etc/slurm/sandbox-wrapper.conf 2>/dev/null; echo "$TOKEN_FILE"')
+fi
+if [[ -n "$_token_path" && -f "$_token_path" ]]; then
+    _s1_parts+=("bypass token")
+else
+    _s1_missing+=("bypass token")
+fi
+
+# eBPF loaded?
+if command -v bpftool &>/dev/null && sudo -n bpftool prog list 2>/dev/null | grep -q 'deny_token_read'; then
+    _s1_parts+=("eBPF LSM")
+else
+    _s1_missing+=("eBPF LSM")
+fi
+
+# Job submit plugin?
+if [[ -f /etc/slurm/job_submit.lua ]] && grep -q 'SANDBOX_BYPASS\|sandbox' /etc/slurm/job_submit.lua 2>/dev/null; then
+    _s1_parts+=("job submit plugin")
+else
+    _s1_missing+=("job submit plugin")
+fi
+
+# System-wide wrappers?
+if [[ -f /usr/bin/sbatch ]] && head -1 /usr/bin/sbatch 2>/dev/null | grep -q bash; then
+    _s1_parts+=("sbatch/srun wrappers")
+else
+    _s1_missing+=("sbatch/srun wrappers")
+fi
+
+if [[ ${#_s1_missing[@]} -eq 0 ]]; then
+    echo "  ✓ §1 Slurm job enforcement: deployed (${_s1_parts[*]})"
+elif [[ ${#_s1_parts[@]} -gt 0 ]]; then
+    echo "  ◐ §1 Slurm job enforcement: partial (have: ${_s1_parts[*]}; missing: ${_s1_missing[*]})"
+else
+    echo "  · §1 Slurm job enforcement: not deployed"
+fi
+
+# §2 — Admin-owned sandbox installation
+_sandbox_dir="$(cd "$SCRIPT_DIR" && pwd)"
+_sandbox_owner=$(stat -c %u "$_sandbox_dir" 2>/dev/null || stat -f %u "$_sandbox_dir" 2>/dev/null)
+if [[ "${_sandbox_owner:-}" == "0" ]]; then
+    echo "  ✓ §2 Admin-owned installation: sandbox scripts owned by root"
+else
+    echo "  · §2 Admin-owned installation: not deployed (scripts owned by user)"
+fi
+
+# §2 — systemd user instances (Landlock-only concern)
+for b in "${AVAILABLE_BACKENDS[@]}"; do
+    if [[ "$b" == "landlock" ]]; then
+        if systemctl is-enabled user@.service &>/dev/null 2>&1; then
+            _user_svc=$(systemctl is-enabled user@.service 2>/dev/null || true)
+            if [[ "$_user_svc" == "masked" ]]; then
+                echo "  ✓ §2 systemd user@.service: masked (Landlock escape mitigated)"
+            else
+                echo "  ⚠ §2 systemd user@.service: active (Landlock escape possible — see ADMIN_HARDENING.md §2)"
+            fi
+        fi
+        break
+    fi
+done
+
+echo ""
+
 if [[ "$ANY_FAIL" == true ]]; then
     echo ""
     echo "  Some tests failed. Run with --verbose for details."
