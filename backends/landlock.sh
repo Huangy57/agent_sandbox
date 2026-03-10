@@ -23,7 +23,8 @@
 #     operations but not AF_UNIX socket connections. If systemd user
 #     instances are running, systemd-run --user can escape the sandbox.
 #     See ADMIN_HARDENING.md §0 for the fix (disable user@.service).
-#   - CLAUDE.md/settings.json merging uses in-place swap with backup/restore
+#   - CLAUDE.md/settings.json merging uses in-place swap with per-instance
+#     backup/restore (marker-based idempotency for NFS concurrency)
 #   - Environment filtering done in shell (not via bwrap --unsetenv/--setenv)
 
 LANDLOCK_SANDBOX="$SANDBOX_DIR/backends/landlock-sandbox.py"
@@ -40,16 +41,38 @@ backend_name() {
     echo "landlock"
 }
 
-# Track files we need to restore on exit
+# Marker injected into modified files so we can distinguish originals from
+# sandbox-modified versions.  Used for idempotent swap/restore on NFS where
+# flock is unreliable and multiple sandboxes may run concurrently.
+_SANDBOX_MARKER="# __SANDBOX_INJECTED_9f3a7c__"
+
+# Per-instance backup key (hostname + PID) — no shared mutable state.
 _LANDLOCK_BACKUPS=()
+_LANDLOCK_INSTANCE_ID="$(hostname -s).$$"
+
+_landlock_has_marker() {
+    [[ -f "$1" ]] && grep -qF "$_SANDBOX_MARKER" "$1"
+}
 
 _landlock_restore() {
     for entry in "${_LANDLOCK_BACKUPS[@]}"; do
-        local backup="${entry%%|*}"
-        local original="${entry##*|}"
-        if [[ -f "$backup" ]]; then
-            mv -f "$backup" "$original" 2>/dev/null || true
+        local resolved="${entry%%|*}"
+        local mode="${entry##*|}"
+        local backup="${resolved}.sandbox-backup.${_LANDLOCK_INSTANCE_ID}"
+
+        if [[ "$mode" == "created" ]]; then
+            # File didn't exist before — remove only if still sandbox-modified
+            if _landlock_has_marker "$resolved"; then
+                rm -f "$resolved"
+            fi
+        elif [[ -f "$backup" ]]; then
+            # Only restore if our backup is a clean original (no marker)
+            # AND the current file is still sandbox-modified
+            if ! _landlock_has_marker "$backup" && _landlock_has_marker "$resolved"; then
+                mv -f "$backup" "$resolved"
+            fi
         fi
+        rm -f "$backup"
     done
     _LANDLOCK_BACKUPS=()
 }
@@ -63,17 +86,22 @@ _landlock_swap_file() {
         resolved="$(readlink -f "$original")"
     fi
 
+    local backup="${resolved}.sandbox-backup.${_LANDLOCK_INSTANCE_ID}"
+
     if [[ -f "$resolved" ]]; then
-        local backup="${resolved}.sandbox-backup"
+        # Save per-instance backup of current state
         cp -f "$resolved" "$backup"
-        _LANDLOCK_BACKUPS+=("${backup}|${resolved}")
-        cat > "$resolved" <<< "$new_content"
+        # Only inject if not already modified by another sandbox
+        if ! _landlock_has_marker "$resolved"; then
+            printf '%s\n# This file was modified by the sandbox. Your original is at:\n#   %s\n# It will be restored automatically when the sandbox exits.\n\n%s\n' \
+                "$_SANDBOX_MARKER" "$backup" "$new_content" > "$resolved"
+        fi
+        _LANDLOCK_BACKUPS+=("${resolved}|existing")
     elif [[ -n "$new_content" ]]; then
-        local dir
-        dir="$(dirname "$resolved")"
-        mkdir -p "$dir"
-        cat > "$resolved" <<< "$new_content"
-        _LANDLOCK_BACKUPS+=("/dev/null|${resolved}")
+        mkdir -p "$(dirname "$resolved")"
+        printf '%s\n# This file was created by the sandbox and will be removed on exit.\n\n%s\n' \
+            "$_SANDBOX_MARKER" "$new_content" > "$resolved"
+        _LANDLOCK_BACKUPS+=("${resolved}|created")
     fi
 }
 
@@ -84,13 +112,20 @@ backend_prepare() {
     # Set up restore trap
     trap '_landlock_restore' EXIT INT TERM
 
-    # --- Restore stale backups from a previous crash FIRST ---
-    for f in "$HOME/.claude/CLAUDE.md.sandbox-backup" "$HOME/.claude/settings.json.sandbox-backup"; do
-        if [[ -f "$f" ]]; then
-            local target="${f%.sandbox-backup}"
-            echo "Warning: Restoring stale backup from previous crash" >&2
-            mv -f "$f" "$target"
-        fi
+    # --- Restore stale backups from a previous crash ---
+    # Look for any orphaned per-instance backups. If a backup is a clean
+    # original (no marker) and the main file is sandbox-modified, restore it.
+    for target in "$HOME/.claude/CLAUDE.md" "$HOME/.claude/settings.json"; do
+        for f in "${target}".sandbox-backup.*; do
+            [[ -f "$f" ]] || continue
+            if ! _landlock_has_marker "$f" && _landlock_has_marker "$target"; then
+                echo "Warning: Restoring stale backup from previous crash" >&2
+                mv -f "$f" "$target"
+            else
+                # Stale backup that's either modified or no longer needed
+                rm -f "$f"
+            fi
+        done
     done
 
     # --- CLAUDE.md overlay (in-place swap) ---

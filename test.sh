@@ -309,12 +309,16 @@ fi
 
 # Landlock/firejail: verify backup was restored after sandbox exit
 if is_landlock || is_firejail; then
-    if [[ -e "$CLAUDE_MD" && ! -f "${CLAUDE_MD}.sandbox-backup" ]]; then
+    # Per-instance backups use .sandbox-backup.<hostname>.<pid> naming
+    local stale_claude stale_settings
+    stale_claude=$(ls "${CLAUDE_MD}".sandbox-backup.* 2>/dev/null | head -1)
+    stale_settings=$(ls "${SETTINGS}".sandbox-backup.* 2>/dev/null | head -1)
+    if [[ -e "$CLAUDE_MD" && -z "$stale_claude" ]]; then
         pass "CLAUDE.md backup was cleaned up after sandbox exit"
     elif [[ -e "$CLAUDE_MD" ]]; then
         fail "CLAUDE.md backup was not cleaned up"
     fi
-    if [[ -e "$SETTINGS" && ! -f "${SETTINGS}.sandbox-backup" ]]; then
+    if [[ -e "$SETTINGS" && -z "$stale_settings" ]]; then
         pass "settings.json backup was cleaned up after sandbox exit"
     elif [[ -e "$SETTINGS" ]]; then
         fail "settings.json backup was not cleaned up"

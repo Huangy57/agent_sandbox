@@ -402,7 +402,7 @@ The wrappers pass all flags through unchanged and call the real Slurm binaries i
 
 ## Agent Awareness (CLAUDE.md)
 
-The sandbox automatically injects instructions into the agent's `CLAUDE.md` — **without modifying your actual CLAUDE.md file**. With bwrap, a merged copy is overlaid via mount namespace. With firejail and landlock, the file is swapped in-place at startup and restored on exit (with crash recovery for stale backups). Outside the sandbox, your CLAUDE.md is completely unchanged.
+The sandbox automatically injects instructions into the agent's `CLAUDE.md` — **without modifying your actual CLAUDE.md file**. With bwrap, a merged copy is overlaid via mount namespace. With firejail and landlock, the file is swapped in-place at startup and restored on exit. A refcount ensures concurrent sandboxes share the backup correctly — the original is only restored when the last sandbox exits. Crash recovery detects stale backups with no active sandboxes. Outside the sandbox, your CLAUDE.md is completely unchanged.
 
 This means the agent:
 

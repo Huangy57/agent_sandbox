@@ -56,16 +56,35 @@ backend_name() {
     echo "firejail"
 }
 
-# Track files we need to restore on exit (same pattern as landlock)
+# Marker injected into modified files so we can distinguish originals from
+# sandbox-modified versions.  Used for idempotent swap/restore on NFS where
+# flock is unreliable and multiple sandboxes may run concurrently.
+_SANDBOX_MARKER="# __SANDBOX_INJECTED_9f3a7c__"
+
+# Per-instance backup key (hostname + PID) — no shared mutable state.
 _FIREJAIL_BACKUPS=()
+_FIREJAIL_INSTANCE_ID="$(hostname -s).$$"
+
+_firejail_has_marker() {
+    [[ -f "$1" ]] && grep -qF "$_SANDBOX_MARKER" "$1"
+}
 
 _firejail_restore() {
     for entry in "${_FIREJAIL_BACKUPS[@]}"; do
-        local backup="${entry%%|*}"
-        local original="${entry##*|}"
-        if [[ -f "$backup" ]]; then
-            mv -f "$backup" "$original" 2>/dev/null || true
+        local resolved="${entry%%|*}"
+        local mode="${entry##*|}"
+        local backup="${resolved}.sandbox-backup.${_FIREJAIL_INSTANCE_ID}"
+
+        if [[ "$mode" == "created" ]]; then
+            if _firejail_has_marker "$resolved"; then
+                rm -f "$resolved"
+            fi
+        elif [[ -f "$backup" ]]; then
+            if ! _firejail_has_marker "$backup" && _firejail_has_marker "$resolved"; then
+                mv -f "$backup" "$resolved"
+            fi
         fi
+        rm -f "$backup"
     done
     _FIREJAIL_BACKUPS=()
 }
@@ -79,17 +98,20 @@ _firejail_swap_file() {
         resolved="$(readlink -f "$original")"
     fi
 
+    local backup="${resolved}.sandbox-backup.${_FIREJAIL_INSTANCE_ID}"
+
     if [[ -f "$resolved" ]]; then
-        local backup="${resolved}.sandbox-backup"
         cp -f "$resolved" "$backup"
-        _FIREJAIL_BACKUPS+=("${backup}|${resolved}")
-        cat > "$resolved" <<< "$new_content"
+        if ! _firejail_has_marker "$resolved"; then
+            printf '%s\n# This file was modified by the sandbox. Your original is at:\n#   %s\n# It will be restored automatically when the sandbox exits.\n\n%s\n' \
+                "$_SANDBOX_MARKER" "$backup" "$new_content" > "$resolved"
+        fi
+        _FIREJAIL_BACKUPS+=("${resolved}|existing")
     elif [[ -n "$new_content" ]]; then
-        local dir
-        dir="$(dirname "$resolved")"
-        mkdir -p "$dir"
-        cat > "$resolved" <<< "$new_content"
-        _FIREJAIL_BACKUPS+=("/dev/null|${resolved}")
+        mkdir -p "$(dirname "$resolved")"
+        printf '%s\n# This file was created by the sandbox and will be removed on exit.\n\n%s\n' \
+            "$_SANDBOX_MARKER" "$new_content" > "$resolved"
+        _FIREJAIL_BACKUPS+=("${resolved}|created")
     fi
 }
 
@@ -100,13 +122,17 @@ backend_prepare() {
     # Set up restore trap
     trap '_firejail_restore' EXIT INT TERM
 
-    # --- Restore stale backups from a previous crash FIRST ---
-    for f in "$HOME/.claude/CLAUDE.md.sandbox-backup" "$HOME/.claude/settings.json.sandbox-backup"; do
-        if [[ -f "$f" ]]; then
-            local target="${f%.sandbox-backup}"
-            echo "Warning: Restoring stale backup from previous crash" >&2
-            mv -f "$f" "$target"
-        fi
+    # --- Restore stale backups from a previous crash ---
+    for target in "$HOME/.claude/CLAUDE.md" "$HOME/.claude/settings.json"; do
+        for f in "${target}".sandbox-backup.*; do
+            [[ -f "$f" ]] || continue
+            if ! _firejail_has_marker "$f" && _firejail_has_marker "$target"; then
+                echo "Warning: Restoring stale backup from previous crash" >&2
+                mv -f "$f" "$target"
+            else
+                rm -f "$f"
+            fi
+        done
     done
 
     # --- CLAUDE.md overlay (in-place swap) ---
