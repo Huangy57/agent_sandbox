@@ -3,8 +3,8 @@
 -- Place in /etc/slurm/job_submit.lua and enable with:
 --   JobSubmitPlugins=lua   (in slurm.conf, then: scontrol reconfigure)
 --
--- Every batch job is sandboxed unless the submitter provides a valid
--- bypass token via:   --export=_SANDBOX_BYPASS=<token>
+-- Every batch job is sandboxed unless _SANDBOX_BYPASS is set in the
+-- job environment (typically injected by sbatch-token-wrapper.sh).
 --
 -- The token file is readable by normal users but protected from sandboxed
 -- processes via eBPF LSM (denies read when PR_SET_NO_NEW_PRIVS is set).

@@ -31,7 +31,7 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 
 A **Slurm job submit plugin** (`job_submit.lua` or C plugin) intercepts every `sbatch`/`srun` submission:
 
-1. Check if the submission carries a valid **bypass token** (e.g., via `--export=_SANDBOX_BYPASS=<token>`)
+1. Check if the job environment contains a valid **bypass token** (`_SANDBOX_BYPASS`)
 2. **Valid token** → job runs as submitted (user is outside the sandbox)
 3. **No token or invalid** → plugin prepends `sandbox-exec.sh --project-dir $PWD --` to the job command
 
@@ -73,11 +73,16 @@ cp admin/job_submit.lua /etc/slurm/job_submit.lua
 #   JobSubmitPlugins=lua
 # Then: scontrol reconfigure
 
+# Install the system-wide sbatch wrapper — auto-injects the token
+# for non-sandboxed users (transparent, no workflow change).
+cp admin/sbatch-token-wrapper.sh /usr/local/bin/sbatch
+chmod +x /usr/local/bin/sbatch
+
 # Build and load eBPF LSM program (see admin/token_protect.bpf.c
 # and admin/README.md for build instructions)
 ```
 
-Working examples are provided in `admin/`: `job_submit.lua` (Slurm plugin) and `token_protect.bpf.c` (eBPF program). The plugin intercepts batch jobs, checks for the bypass token in `_SANDBOX_BYPASS`, and wraps unvalidated jobs in `sandbox-exec.sh`. The token is cleared from the job environment after validation so it doesn't leak to the compute node. See `admin/README.md` for full setup instructions.
+Working examples are provided in `admin/`: `job_submit.lua` (Slurm plugin), `sbatch-token-wrapper.sh` (system-wide wrapper), and `token_protect.bpf.c` (eBPF program). The wrapper automatically reads the bypass token and injects it as an environment variable — non-sandboxed users run `sbatch` with no workflow change. The plugin intercepts batch jobs, checks for the token in `_SANDBOX_BYPASS`, and wraps unvalidated jobs in `sandbox-exec.sh`. The token is cleared from the job environment after validation so it doesn't leak to the compute node. See `admin/README.md` for full setup instructions.
 
 ### Tested
 
