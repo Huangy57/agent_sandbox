@@ -79,7 +79,6 @@ The installer:
 ├── sandbox.conf          # ← Your permissions config — edit this
 ├── sandbox-lib.sh        # Core library (config loading, backend detection)
 ├── sandbox-exec.sh       # Main entry point (auto-selects backend)
-├── bwrap-sandbox.sh      # Backward-compatible entry point (delegates to sandbox-exec.sh)
 ├── sbatch-sandbox.sh     # Slurm sbatch wrapper
 ├── srun-sandbox.sh       # Slurm srun wrapper
 ├── sandbox-claude.md     # Agent instructions (overlaid into CLAUDE.md inside sandbox)

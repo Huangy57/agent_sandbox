@@ -1,7 +1,7 @@
 #! /bin/bash --
 # sandbox-lib.sh — Core sandbox library (backend-agnostic)
 #
-# Sourced by sandbox-exec.sh, bwrap-sandbox.sh, sbatch-sandbox.sh, srun-sandbox.sh.
+# Sourced by sandbox-exec.sh, sbatch-sandbox.sh, srun-sandbox.sh.
 # Reads configuration from sandbox.conf, detects the best available backend,
 # and provides:
 #

@@ -115,7 +115,7 @@ echo "→ Installing sandbox scripts to $SANDBOX_DIR/"
 mkdir -p "$SANDBOX_DIR/bin"
 mkdir -p "$SANDBOX_DIR/backends"
 
-for file in sandbox-lib.sh sandbox-exec.sh bwrap-sandbox.sh sbatch-sandbox.sh srun-sandbox.sh sandbox-claude.md sandbox-settings.json test.sh; do
+for file in sandbox-lib.sh sandbox-exec.sh sbatch-sandbox.sh srun-sandbox.sh sandbox-claude.md sandbox-settings.json test.sh; do
     cp "$SCRIPT_DIR/$file" "$SANDBOX_DIR/$file"
 done
 
@@ -128,7 +128,6 @@ for file in bwrap.sh landlock.sh landlock-sandbox.py; do
 done
 
 chmod +x "$SANDBOX_DIR/sandbox-exec.sh"
-chmod +x "$SANDBOX_DIR/bwrap-sandbox.sh"
 chmod +x "$SANDBOX_DIR/sbatch-sandbox.sh"
 chmod +x "$SANDBOX_DIR/srun-sandbox.sh"
 chmod +x "$SANDBOX_DIR/test.sh"
