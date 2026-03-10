@@ -19,6 +19,11 @@ if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
         REAL_SRUN="${REAL_SRUN:-/usr/bin/srun}"
     fi
 else
+    # If admin wrappers are deployed (sandbox-wrapper.conf exists), use the
+    # configured real binary path to skip the admin wrapper indirection.
+    if [[ -z "${REAL_SRUN:-}" && -f /etc/slurm/sandbox-wrapper.conf ]]; then
+        source /etc/slurm/sandbox-wrapper.conf
+    fi
     REAL_SRUN="${REAL_SRUN:-/usr/bin/srun}"
 fi
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"

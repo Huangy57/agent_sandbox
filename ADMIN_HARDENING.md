@@ -73,16 +73,28 @@ cp admin/job_submit.lua /etc/slurm/job_submit.lua
 #   JobSubmitPlugins=lua
 # Then: scontrol reconfigure
 
-# Install the system-wide sbatch wrapper — auto-injects the token
+# Install system-wide sbatch/srun wrappers — auto-inject the token
 # for non-sandboxed users (transparent, no workflow change).
-cp admin/sbatch-token-wrapper.sh /usr/local/bin/sbatch
-chmod +x /usr/local/bin/sbatch
+mkdir -p /usr/libexec/slurm
+mv /usr/bin/sbatch /usr/libexec/slurm/sbatch
+mv /usr/bin/srun /usr/libexec/slurm/srun
+cp admin/sbatch-token-wrapper.sh /usr/bin/sbatch
+cp admin/srun-token-wrapper.sh /usr/bin/srun
+cp admin/sandbox-wrapper.conf /etc/slurm/sandbox-wrapper.conf
+chmod +x /usr/bin/sbatch /usr/bin/srun
 
 # Build and load eBPF LSM program (see admin/token_protect.bpf.c
 # and admin/README.md for build instructions)
 ```
 
-Working examples are provided in `admin/`: `job_submit.lua` (Slurm plugin), `sbatch-token-wrapper.sh` (system-wide wrapper), and `token_protect.bpf.c` (eBPF program). The wrapper automatically reads the bypass token and injects it as an environment variable — non-sandboxed users run `sbatch` with no workflow change. The plugin intercepts batch jobs, checks for the token in `_SANDBOX_BYPASS`, and wraps unvalidated jobs in `sandbox-exec.sh`. The token is cleared from the job environment after validation so it doesn't leak to the compute node. See `admin/README.md` for full setup instructions.
+Working examples are provided in `admin/`:
+
+- `sbatch-token-wrapper.sh` / `srun-token-wrapper.sh` — system-wide wrappers that replace `/usr/bin/sbatch` and `/usr/bin/srun`. They read the eBPF-protected token and either inject it (sbatch) or pass through (srun) for normal users. Sandboxed processes cannot read the token, so sbatch jobs get wrapped by the plugin and srun commands get wrapped in `sandbox-exec.sh`.
+- `job_submit.lua` — Slurm job submit plugin (server-side enforcement for sbatch). Wraps unvalidated jobs in `sandbox-exec.sh`. Clears the token from the job environment after validation so it doesn't leak to the compute node.
+- `token_protect.bpf.c` — eBPF LSM program that denies token file reads for `no_new_privs` processes.
+- `sandbox-wrapper.conf` — shared configuration for the wrappers (token path, real binary locations, sandbox-exec.sh path). Deployed to `/etc/slurm/`.
+
+See `admin/README.md` for full setup instructions.
 
 ### Tested
 
@@ -91,7 +103,7 @@ All components have been end-to-end tested on an Ubuntu 24.04 VM (kernel 6.8, Sl
 - **eBPF LSM program** — compiled with clang/libbpf, loaded via `bpftool prog loadall ... autoattach`. Normal processes can read the token file; processes with `PR_SET_NO_NEW_PRIVS` get `EACCES`.
 - **Slurm job submit plugin** — jobs without a bypass token are wrapped in `sandbox-exec.sh`; jobs with a valid `_SANDBOX_BYPASS` token pass through unsandboxed; the token is cleared from the job environment after validation.
 - **Combined flow (all backends)** — verified with bwrap, firejail, and Landlock. A sandboxed job cannot read the bypass token (eBPF denies it via `no_new_privs` check), so any Slurm job it submits lacks the token and gets sandboxed by the plugin. Sandboxed jobs show `SANDBOX_ACTIVE=1`, hidden `~/.ssh`, and `EACCES`/`ENOENT` on the token file. Unsandboxed jobs (valid token) see all files normally.
-- **Sandbox test suite** — 114 total: 39/39 pass (bwrap), 38/38 pass + 3 skipped (firejail), 30/30 pass + 4 skipped (Landlock). 107 passed, 0 failed, 7 skipped. Skips are for backend-specific features (binary relocation, self-protection, /tmp isolation).
+- **Sandbox test suite** — 126 total: 39/39 pass (bwrap), 38/38 pass + 3 skipped (firejail), 30/30 pass + 4 skipped (Landlock), 12/12 pass (admin wrappers). 119 passed, 0 failed, 7 skipped. Skips are for backend-specific features (binary relocation, self-protection, /tmp isolation). Admin wrapper tests are dry-run (no job submission — works on busy HPC clusters) and auto-detected via `sandbox-wrapper.conf`.
 
 The test setup used a single-node Slurm cluster (slurmctld + slurmd + slurmdbd with MariaDB). bwrap on Ubuntu 24.04 requires an AppArmor profile to allow unprivileged user namespaces (the installer prints the needed profile if this is the issue).
 

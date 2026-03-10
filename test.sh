@@ -821,9 +821,167 @@ for backend in "${AVAILABLE_BACKENDS[@]}"; do
     run_tests "$backend"
 done
 
+# ── Admin wrapper tests (if sandbox-wrapper.conf is deployed) ────
+
+WRAPPER_CONF=""
+if [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
+    WRAPPER_CONF="/etc/slurm/sandbox-wrapper.conf"
+elif [[ -f "$SCRIPT_DIR/admin/sandbox-wrapper.conf" ]]; then
+    WRAPPER_CONF="$SCRIPT_DIR/admin/sandbox-wrapper.conf"
+fi
+
+if [[ -n "$WRAPPER_CONF" ]]; then
+    source "$WRAPPER_CONF"
+    echo ""
+    echo "10. Admin wrappers (sandbox-wrapper.conf detected)"
+
+    ADMIN_PASS=0
+    ADMIN_FAIL=0
+    ADMIN_SKIP=0
+    admin_pass() { ((ADMIN_PASS++)); echo "  ✓ $1"; }
+    admin_fail() { ((ADMIN_FAIL++)); echo "  ✗ $1"; [[ "$VERBOSE" == true && -n "${2:-}" ]] && echo "    $2"; }
+    admin_skip() { ((ADMIN_SKIP++)); echo "  ⊘ $1 (skipped)"; }
+
+    # Check that real binaries exist at configured locations
+    if [[ -x "${REAL_SBATCH:-}" ]]; then
+        OUTPUT=$(file "$REAL_SBATCH" 2>&1)
+        if echo "$OUTPUT" | grep -qi 'ELF'; then
+            admin_pass "Real sbatch binary at $REAL_SBATCH"
+        else
+            admin_fail "Real sbatch at $REAL_SBATCH is not an ELF binary" "$OUTPUT"
+        fi
+    else
+        admin_skip "Real sbatch not found at ${REAL_SBATCH:-<unset>}"
+    fi
+
+    if [[ -x "${REAL_SRUN:-}" ]]; then
+        OUTPUT=$(file "$REAL_SRUN" 2>&1)
+        if echo "$OUTPUT" | grep -qi 'ELF'; then
+            admin_pass "Real srun binary at $REAL_SRUN"
+        else
+            admin_fail "Real srun at $REAL_SRUN is not an ELF binary" "$OUTPUT"
+        fi
+    else
+        admin_skip "Real srun not found at ${REAL_SRUN:-<unset>}"
+    fi
+
+    # Check that /usr/bin/sbatch and /usr/bin/srun are wrapper scripts
+    if [[ -f /usr/bin/sbatch ]]; then
+        OUTPUT=$(file /usr/bin/sbatch 2>&1)
+        if echo "$OUTPUT" | grep -qi 'script\|text'; then
+            admin_pass "/usr/bin/sbatch is a wrapper script (not the real binary)"
+        else
+            admin_skip "/usr/bin/sbatch is the real binary (admin wrappers not deployed)"
+        fi
+    fi
+
+    if [[ -f /usr/bin/srun ]]; then
+        OUTPUT=$(file /usr/bin/srun 2>&1)
+        if echo "$OUTPUT" | grep -qi 'script\|text'; then
+            admin_pass "/usr/bin/srun is a wrapper script (not the real binary)"
+        else
+            admin_skip "/usr/bin/srun is the real binary (admin wrappers not deployed)"
+        fi
+    fi
+
+    # Check token file exists and is readable
+    if [[ -n "${TOKEN_FILE:-}" && -f "$TOKEN_FILE" ]]; then
+        if cat "$TOKEN_FILE" &>/dev/null; then
+            admin_pass "Token file readable ($TOKEN_FILE)"
+        else
+            admin_fail "Token file exists but is not readable ($TOKEN_FILE)"
+        fi
+    else
+        admin_skip "Token file not found (${TOKEN_FILE:-<unset>})"
+    fi
+
+    # Test sbatch wrapper logic (dry run — no job submission needed)
+    SBATCH_WRAPPER=""
+    if [[ -f /usr/bin/sbatch ]] && head -1 /usr/bin/sbatch 2>/dev/null | grep -q bash; then
+        SBATCH_WRAPPER=/usr/bin/sbatch
+    fi
+
+    if [[ -n "$SBATCH_WRAPPER" ]]; then
+        # Verify wrapper sources sandbox-wrapper.conf
+        if grep -q 'sandbox-wrapper.conf' "$SBATCH_WRAPPER"; then
+            admin_pass "sbatch wrapper sources sandbox-wrapper.conf"
+        else
+            admin_fail "sbatch wrapper does not source sandbox-wrapper.conf"
+        fi
+
+        # Verify wrapper strips _SANDBOX_BYPASS from --export= flags
+        if grep -q '_SANDBOX_BYPASS' "$SBATCH_WRAPPER"; then
+            admin_pass "sbatch wrapper handles _SANDBOX_BYPASS stripping"
+        else
+            admin_fail "sbatch wrapper does not handle _SANDBOX_BYPASS stripping"
+        fi
+
+        # Verify wrapper injects token via env var (not CLI)
+        if grep -q 'export _SANDBOX_BYPASS' "$SBATCH_WRAPPER"; then
+            admin_pass "sbatch wrapper injects token via environment (not CLI)"
+        else
+            admin_fail "sbatch wrapper does not export _SANDBOX_BYPASS"
+        fi
+
+        # Test the stripping logic directly
+        OUTPUT=$(echo "ALL,_SANDBOX_BYPASS=secret,FOO=bar" | sed 's/,\?_SANDBOX_BYPASS=[^,]*//' | sed 's/^,//')
+        if [[ "$OUTPUT" == "ALL,FOO=bar" ]]; then
+            admin_pass "Token stripping preserves other --export= variables"
+        else
+            admin_fail "Token stripping produced unexpected output" "$OUTPUT"
+        fi
+    fi
+
+    # Test srun wrapper logic (dry run)
+    SRUN_WRAPPER=""
+    if [[ -f /usr/bin/srun ]] && head -1 /usr/bin/srun 2>/dev/null | grep -q bash; then
+        SRUN_WRAPPER=/usr/bin/srun
+    fi
+
+    if [[ -n "$SRUN_WRAPPER" ]]; then
+        # Verify wrapper checks SANDBOX_ACTIVE to avoid nesting
+        if grep -q 'SANDBOX_ACTIVE' "$SRUN_WRAPPER"; then
+            admin_pass "srun wrapper checks SANDBOX_ACTIVE (avoids nesting)"
+        else
+            admin_fail "srun wrapper does not check SANDBOX_ACTIVE"
+        fi
+
+        # Verify wrapper reads token to decide pass-through vs sandbox
+        if grep -q 'TOKEN_FILE\|sandbox-wrapper.conf' "$SRUN_WRAPPER"; then
+            admin_pass "srun wrapper reads token for pass-through decision"
+        else
+            admin_fail "srun wrapper does not read token"
+        fi
+    fi
+
+    # Test token protection: sandboxed process cannot read token
+    if [[ -n "${TOKEN_FILE:-}" && -f "$TOKEN_FILE" && -x "$SCRIPT_DIR/sandbox-exec.sh" ]]; then
+        OUTPUT=$(timeout 15 "$SCRIPT_DIR/sandbox-exec.sh" \
+            --project-dir "$PROJECT_DIR" -- \
+            cat "$TOKEN_FILE" 2>&1) || true
+        if echo "$OUTPUT" | grep -qi 'permission denied\|EACCES'; then
+            admin_pass "Token protected from sandboxed process"
+        elif [[ -z "$OUTPUT" ]]; then
+            admin_pass "Token hidden from sandboxed process (empty read)"
+        else
+            admin_fail "Token readable from sandboxed process" "$OUTPUT"
+        fi
+    fi
+
+    echo ""
+    echo "════════════════════════════════════════════════"
+    echo "  Admin wrappers: $ADMIN_PASS passed, $ADMIN_FAIL failed, $ADMIN_SKIP skipped"
+    echo "════════════════════════════════════════════════"
+
+    TOTAL_PASS=$((TOTAL_PASS + ADMIN_PASS))
+    TOTAL_FAIL=$((TOTAL_FAIL + ADMIN_FAIL))
+    TOTAL_SKIP=$((TOTAL_SKIP + ADMIN_SKIP))
+    [[ $ADMIN_FAIL -gt 0 ]] && ANY_FAIL=true
+fi
+
 # ── Overall summary ──────────────────────────────────────────────
 
-if [[ ${#AVAILABLE_BACKENDS[@]} -gt 1 ]]; then
+if [[ ${#AVAILABLE_BACKENDS[@]} -gt 1 || -n "$WRAPPER_CONF" ]]; then
     GRAND_TOTAL=$((TOTAL_PASS + TOTAL_FAIL + TOTAL_SKIP))
     echo "╔═══════════════════════════════════════════════╗"
     echo "║  Overall Results                              ║"

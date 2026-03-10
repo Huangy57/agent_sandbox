@@ -22,6 +22,11 @@ if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
         REAL_SBATCH="${REAL_SBATCH:-/usr/bin/sbatch}"
     fi
 else
+    # If admin wrappers are deployed (sandbox-wrapper.conf exists), use the
+    # configured real binary path to skip the admin wrapper indirection.
+    if [[ -z "${REAL_SBATCH:-}" && -f /etc/slurm/sandbox-wrapper.conf ]]; then
+        source /etc/slurm/sandbox-wrapper.conf
+    fi
     REAL_SBATCH="${REAL_SBATCH:-/usr/bin/sbatch}"
 fi
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"

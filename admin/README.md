@@ -1,19 +1,22 @@
 # Admin Hardening: Sandbox-by-Default Slurm Submission
 
 This directory contains the components for Section 1 of
-[ADMIN_HARDENING.md](../ADMIN_HARDENING.md) — a Slurm job submit plugin
-that sandboxes all jobs by default, with an eBPF LSM program that protects
-the bypass token from sandboxed processes.
+[ADMIN_HARDENING.md](../ADMIN_HARDENING.md) — system-wide Slurm wrappers
+that sandbox jobs by default, a job submit plugin for server-side
+enforcement, and an eBPF LSM program that protects the bypass token from
+sandboxed processes.
 
 End-to-end tested on Ubuntu 24.04 (kernel 6.8, Slurm 23.11, Landlock backend) with a single-node Slurm cluster (slurmctld + slurmd + slurmdbd + MariaDB). All components — eBPF token protection, job submit plugin wrapping, and combined sandbox-by-default flow — verified working.
 
 ## Components
 
-| File | Purpose |
-|---|---|
-| `job_submit.lua` | Slurm job submit plugin — wraps jobs in `sandbox-exec.sh` unless a valid bypass token is provided |
-| `token_protect.bpf.c` | eBPF LSM program — denies read access to the token file for processes with `no_new_privs` set |
-| `sbatch-token-wrapper.sh` | System-wide sbatch wrapper — auto-injects the bypass token for non-sandboxed users (transparent, no workflow change) |
+| Source | Deploys to | Purpose |
+|---|---|---|
+| `admin/sandbox-wrapper.conf` | `/etc/slurm/sandbox-wrapper.conf` | Shared configuration — token path, real binary locations, sandbox-exec.sh path |
+| `admin/sbatch-token-wrapper.sh` | `/usr/bin/sbatch` | System-wide sbatch wrapper — auto-injects bypass token; strips manual `_SANDBOX_BYPASS` from CLI |
+| `admin/srun-token-wrapper.sh` | `/usr/bin/srun` | System-wide srun wrapper — passes through for normal users, wraps in sandbox-exec.sh for sandboxed processes |
+| `admin/job_submit.lua` | `/etc/slurm/job_submit.lua` | Slurm job submit plugin — server-side enforcement for sbatch (wraps jobs unless valid token is present) |
+| `admin/token_protect.bpf.c` | `/sys/fs/bpf/token_protect` (compiled) | eBPF LSM program — denies read access to the token file for processes with `no_new_privs` set |
 
 ## Setup
 
@@ -43,24 +46,34 @@ sudo cp job_submit.lua /etc/slurm/job_submit.lua
 sudo scontrol reconfigure
 ```
 
-### 3. Deploy the system-wide sbatch wrapper
+### 3. Configure and deploy the Slurm wrappers
+
+First, edit `sandbox-wrapper.conf` to match your environment:
 
 ```bash
-# Install the wrapper ahead of /usr/bin/sbatch in PATH
-sudo cp sbatch-token-wrapper.sh /usr/local/bin/sbatch
-sudo chmod +x /usr/local/bin/sbatch
+# Edit paths in sandbox-wrapper.conf:
+#   TOKEN_FILE   — path to the bypass token (default: /etc/slurm/.sandbox-bypass-token)
+#   REAL_SBATCH  — where the real sbatch binary will be moved to
+#   REAL_SRUN    — where the real srun binary will be moved to
+#   SANDBOX_EXEC — path to sandbox-exec.sh (used by srun wrapper)
+
+sudo cp sandbox-wrapper.conf /etc/slurm/sandbox-wrapper.conf
 ```
 
-This wrapper makes the token injection **transparent** — non-sandboxed users
-run `sbatch` as usual with no workflow change. The wrapper reads the token
-(eBPF allows it for normal processes) and sets `_SANDBOX_BYPASS` as an
-environment variable (not a CLI argument — so the token never appears in
-`/proc/*/cmdline`). The job submit plugin sees the valid token and lets the
-job through unsandboxed.
+Then deploy the wrappers — move the real binaries and replace them:
 
-Sandboxed processes cannot read the token (eBPF returns `EACCES` when
-`no_new_privs` is set), so the wrapper submits without it, and the plugin
-sandboxes the job.
+```bash
+sudo mkdir -p /usr/libexec/slurm
+sudo mv /usr/bin/sbatch /usr/libexec/slurm/sbatch
+sudo mv /usr/bin/srun /usr/libexec/slurm/srun
+sudo cp sbatch-token-wrapper.sh /usr/bin/sbatch
+sudo cp srun-token-wrapper.sh /usr/bin/srun
+sudo chmod +x /usr/bin/sbatch /usr/bin/srun
+```
+
+This ensures every `sbatch`/`srun` call goes through the wrappers — whether
+by name, absolute path, or from scripts. The wrappers find the real binaries
+at the `REAL_SBATCH`/`REAL_SRUN` paths configured in `sandbox-wrapper.conf`.
 
 ### 4. Build and load the eBPF program
 
@@ -90,24 +103,31 @@ To persist across reboots, add the load/attach commands to a systemd unit or
 
 The system enforces sandbox-by-default through three layers:
 
-1. **System-wide sbatch wrapper** (`sbatch-token-wrapper.sh` deployed as
-   `/usr/local/bin/sbatch`) — automatically reads the bypass token and
-   injects it into the submission. This is transparent to users — they run
-   `sbatch` as usual with no workflow change.
+1. **System-wide Slurm wrappers** — replace `/usr/bin/sbatch` and
+   `/usr/bin/srun`. Each wrapper tries to read the eBPF-protected token
+   file. Normal users can read it; sandboxed processes cannot.
 
-2. **Slurm job submit plugin** (`job_submit.lua`) — server-side enforcement.
-   Every batch job is wrapped in `sandbox-exec.sh` unless a valid
-   `_SANDBOX_BYPASS` token is present in the job environment.
+   - **sbatch wrapper:** injects the token as an environment variable (never
+     in `/proc/*/cmdline`) → the job submit plugin lets the job through. Any
+     `_SANDBOX_BYPASS` in `--export=` flags is stripped.
+   - **srun wrapper:** token readable → exec real srun directly (no
+     sandboxing). Token not readable → wraps the command in
+     `sandbox-exec.sh`.
+
+2. **Slurm job submit plugin** (`job_submit.lua`) — server-side enforcement
+   for sbatch. Every batch job is wrapped in `sandbox-exec.sh` unless a
+   valid `_SANDBOX_BYPASS` token is present in the job environment. The
+   token is cleared after validation so it doesn't leak to the compute node.
 
 3. **eBPF LSM** (`token_protect.bpf.c`) — prevents sandboxed processes from
    reading the token file. All sandbox backends set `PR_SET_NO_NEW_PRIVS`,
    so any process inside the sandbox gets `EACCES` when opening the token.
 
-**The result:** when a non-sandboxed user runs `sbatch`, the wrapper reads
-the token (eBPF allows it), injects it, and the plugin lets the job through
-— no change to the user's workflow. When a sandboxed agent runs `sbatch`,
-the wrapper cannot read the token (eBPF blocks it), so the plugin wraps the
-job in the sandbox. Sandbox-by-default is enforced without any user action.
+**The result:** users run `sbatch` and `srun` as usual with no workflow
+change. The wrappers read the token (eBPF allows it) and either inject it
+(sbatch) or pass through (srun). When a sandboxed agent runs these commands,
+the wrappers cannot read the token — sbatch submits without it (plugin
+sandboxes the job), srun wraps the command in the sandbox directly.
 
 ## Verification
 
@@ -122,17 +142,21 @@ ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)      # PR_SET_NO_NEW_PRIVS
 open('/etc/slurm/.sandbox-bypass-token').read()
 "  # raises PermissionError (EACCES)
 
-# 3. Normal user submits a job — wrapper auto-injects token, runs unsandboxed
+# 3. Normal user: sbatch runs unsandboxed (wrapper auto-injects token)
 sbatch --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
-# output shows: SANDBOX_ACTIVE=  (empty — not sandboxed, no workflow change)
+# output: SANDBOX_ACTIVE=  (empty — not sandboxed, no workflow change)
 
-# 4. Simulate sandboxed submission (no token) — plugin sandboxes the job
-/usr/bin/sbatch --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
-# output shows: SANDBOX_ACTIVE=1  (sandboxed — no token, plugin wraps it)
+# 4. Normal user: srun runs unsandboxed (wrapper passes through)
+srun echo "SANDBOX_ACTIVE=$SANDBOX_ACTIVE"
+# output: SANDBOX_ACTIVE=  (empty — not sandboxed, no workflow change)
 
-# 5. Manual --export=_SANDBOX_BYPASS is stripped by the wrapper
+# 5. Sandboxed process: sbatch/srun get sandboxed (wrapper can't read token)
+# (from inside sandbox-exec.sh — e.g., an agent session)
+sandbox-exec.sh -- bash -c 'sbatch --wrap="echo SANDBOX_ACTIVE=\$SANDBOX_ACTIVE" -o /tmp/test-%j.out'
+# output: SANDBOX_ACTIVE=1  (sandboxed)
+
+# 6. Manual --export=_SANDBOX_BYPASS is stripped by the sbatch wrapper
 sbatch --export=ALL,_SANDBOX_BYPASS="wrong" \
     --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
-# output shows: SANDBOX_ACTIVE=  (not sandboxed — wrapper stripped the
-# manual token and injected the real one via environment variable)
+# output: SANDBOX_ACTIVE=  (wrapper stripped it, injected real token)
 ```
