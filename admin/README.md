@@ -66,23 +66,51 @@ sudo bpftool map update id $MAP_ID key 0x00 0x00 0x00 0x00 value $BYTES
 To persist across reboots, add the load/attach commands to a systemd unit or
 `/etc/rc.local`.
 
+## How it works
+
+The system enforces sandbox-by-default through two layers:
+
+1. **Slurm job submit plugin** (`job_submit.lua`) — every batch job is
+   wrapped in `sandbox-exec.sh` *unless* the submitter explicitly passes
+   `--export=_SANDBOX_BYPASS=<token>` with the correct token.
+
+2. **eBPF LSM** (`token_protect.bpf.c`) — prevents sandboxed processes from
+   reading the token file. All sandbox backends set `PR_SET_NO_NEW_PRIVS`,
+   so any process inside the sandbox gets `EACCES` when opening the token.
+
+**The result:** a sandboxed agent cannot read the bypass token, so any Slurm
+job it submits lacks the token and is itself sandboxed by the plugin.
+Sandbox-by-default is enforced without any user action — unsandboxed jobs
+require the admin to explicitly provide the token.
+
+The `_SANDBOX_BYPASS` environment variable is **never forwarded
+automatically**. It must be set explicitly via `sbatch --export=`. A
+sandboxed process cannot read the token (eBPF blocks it), so it has no way
+to pass it to child jobs.
+
 ## Verification
 
 ```bash
-# Normal process can read the token
-cat /etc/slurm/.sandbox-bypass-token  # should succeed
+# 1. eBPF token protection — normal process can read
+cat /etc/slurm/.sandbox-bypass-token          # succeeds
 
-# Process with no_new_privs cannot
+# 2. eBPF token protection — sandboxed (no_new_privs) process cannot
 python3 -c "
 import ctypes
-ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)  # PR_SET_NO_NEW_PRIVS
+ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)      # PR_SET_NO_NEW_PRIVS
 open('/etc/slurm/.sandbox-bypass-token').read()
-"  # should raise PermissionError
+"  # raises PermissionError (EACCES)
 
-# Job without token gets sandboxed
-sbatch --wrap='echo test'  # plugin prepends sandbox-exec.sh
+# 3. Job without token → sandboxed (plugin wraps it)
+sbatch --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
+# output shows: SANDBOX_ACTIVE=1
 
-# Job with valid token runs unsandboxed
+# 4. Job with valid token → NOT sandboxed (plugin passes it through)
 TOKEN=$(cat /etc/slurm/.sandbox-bypass-token)
-sbatch --export=ALL,_SANDBOX_BYPASS="$TOKEN" --wrap='echo test'
+sbatch --export=ALL,_SANDBOX_BYPASS="$TOKEN" --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
+# output shows: SANDBOX_ACTIVE=  (empty — not sandboxed)
+
+# 5. Job with wrong token → sandboxed (token mismatch)
+sbatch --export=ALL,_SANDBOX_BYPASS="wrong" --wrap='echo SANDBOX_ACTIVE=$SANDBOX_ACTIVE' -o /tmp/test-%j.out
+# output shows: SANDBOX_ACTIVE=1
 ```
