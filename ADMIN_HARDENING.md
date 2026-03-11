@@ -184,7 +184,9 @@ This allows bwrap (and only bwrap) to create user namespaces. Other programs rem
 bwrap --ro-bind / / -- id
 ```
 
-If bwrap is installed via Homebrew (`~/.linuxbrew/bin/bwrap`), use that path in the profile. The sandbox auto-detects whichever bwrap is in `$PATH`.
+The sandbox auto-detects bwrap from `$PATH`, or admins can set `BWRAP=/path/to/bwrap` in `sandbox.conf` to pin a specific binary. Without admin intervention, users can install bwrap themselves via [Homebrew](https://brew.sh/) (`brew install bubblewrap`), which places it at `~/.linuxbrew/bin/bwrap`.
+
+**Hardening note:** The AppArmor profile grants `userns` permission only to the binary at the exact path specified. If the admin installs bwrap to a controlled location and uses that path in the profile, users cannot gain user namespace access by compiling or installing their own copy elsewhere. This is stronger than per-user Homebrew installs, where each user controls the binary.
 
 #### Seccomp: not recommended for bwrap
 
@@ -214,7 +216,7 @@ sudo apt install firejail
 SANDBOX_BACKEND=firejail ./sandbox-exec.sh -- bash
 ```
 
-The sandbox uses `--allusers` to disable firejail's `/etc/passwd` filtering, which would otherwise remove UIDs >= `UID_MIN` (typically 1000) and break Slurm if the `slurm` user has a UID in that range (common with LDAP). This is safe because `/etc/passwd` is world-readable, `--nonewprivs` prevents setuid escalation, and `--whitelist` already hides other users' home directories.
+The sandbox uses `--allusers` to disable firejail's built-in `/etc/passwd` filtering, which would otherwise remove UIDs >= `UID_MIN` (typically 1000) and break Slurm if the `slurm` user has a UID in that range. User enumeration prevention is instead handled separately by `FILTER_PASSWD=true` (default), which blocks NSS daemon sockets to prevent LDAP/AD enumeration. Note the caveat above: on clusters where the current user exists only in LDAP, this breaks user resolution and `FILTER_PASSWD` should be set to `false`.
 
 #### HPC compatibility notes (firejail)
 
