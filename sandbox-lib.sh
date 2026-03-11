@@ -203,10 +203,10 @@ generate_filtered_passwd() {
     my_gid="$(id -g)"
     awk -F: "(\$3 < 1000) || (\$3 == $my_gid)" /etc/group > "$tmpdir/group"
 
-    # Append current user's groups and service groups via getent
-    for _svc_group in "$(id -gn)" slurm munge; do
-        if ! grep -q "^${_svc_group}:" "$tmpdir/group"; then
-            getent group "$_svc_group" >> "$tmpdir/group" 2>/dev/null || true
+    # Append all of the current user's groups and service groups via getent
+    for _svc_gid in $(id -G) $(getent passwd slurm 2>/dev/null | cut -d: -f4) $(getent passwd munge 2>/dev/null | cut -d: -f4); do
+        if ! grep -q "^[^:]*:[^:]*:${_svc_gid}:" "$tmpdir/group"; then
+            getent group "$_svc_gid" >> "$tmpdir/group" 2>/dev/null || true
         fi
     done
 
