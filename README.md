@@ -136,10 +136,6 @@ bash test.sh --verbose   # show details on failure
 Add this to your `.bashrc` or `.zshrc` for quick access:
 
 ```bash
-# With tmux (enables agent teams):
-alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- tmux new-session claude'
-
-# Without tmux:
 alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'
 ```
 
@@ -160,16 +156,6 @@ claude-sandbox
 ```
 
 That's it. Claude starts in your project directory with full read access to the HPC but write access **only** to that directory. Your SSH keys, API tokens, and all credentials are invisible.
-
-### Agent Teams (tmux)
-
-Claude Code agent teams require tmux. The outer tmux socket is blocked because the tmux server runs outside the sandbox — any client with socket access could run `tmux new-window 'unsandboxed command'` to escape. Instead, start a nested tmux inside the sandbox:
-
-```bash
-~/.claude/sandbox/sandbox-exec.sh -- tmux new-session claude
-```
-
-The nested tmux uses **`Ctrl-a`** as prefix (instead of `Ctrl-b`) to avoid conflicts with the outer session. A minimal `sandbox-tmux.conf` is used instead of your `~/.tmux.conf` — custom configs with `run-shell` plugins or status scripts may reference paths hidden by the sandbox. Edit `~/.claude/sandbox/sandbox-tmux.conf` to customize.
 
 ### Verify the Sandbox
 
@@ -380,7 +366,7 @@ The sandbox inherits your shell environment, then:
 | **PID namespace** | Isolated by bwrap (`--unshare-pid`) and firejail (default). Not isolated by Landlock. |
 | **`/run`** | Partially isolated. Firejail blacklists `/run/dbus`, `/run/user`, `/run/systemd/private`, `/run/containerd` but allows munge socket. Bwrap exposes only `/run/munge`. Landlock allows all of `/run`. |
 | **User enumeration** | bwrap/firejail: filtered (`FILTER_PASSWD=true` — bwrap overlays `/etc/passwd` + nsswitch; firejail blocks NSS daemon sockets). Landlock: not filtered. |
-| **tmux** | Outer tmux socket blocked by `/tmp` isolation (exposing it would allow sandbox escape). A `bin/tmux` wrapper auto-loads `sandbox-tmux.conf` (prefix `Ctrl-a`) for clean nesting, creates the socket directory, and falls back `TERM` when terminfo is missing. On kernels < 5.4 or >= 6.2, host `/dev` is used instead of bwrap's minimal `/dev` for working pty allocation (see Known Limitations). |
+| **tmux** | Outer tmux socket blocked by `/tmp` isolation (exposing it would allow sandbox escape). Experimental: a `bin/tmux` wrapper enables nested tmux with `Ctrl-a` prefix. Requires `BIND_DEV_PTS=true` on kernels < 5.4 (see Known Limitations). |
 
 ---
 
@@ -430,6 +416,21 @@ The sandbox-specific instructions live in `~/.claude/sandbox/sandbox-claude.md`.
 ```bash
 $EDITOR ~/.claude/sandbox/sandbox-claude.md
 ```
+
+---
+
+## Agent Teams / tmux (experimental)
+
+Claude Code agent teams require tmux. The outer tmux socket is blocked inside the sandbox (exposing it would allow escape via `tmux new-window 'unsandboxed command'`). Instead, a nested tmux runs inside the sandbox with a separate prefix key.
+
+**Requirements:** tmux inside the sandbox needs working pty allocation. On kernels >= 5.4, bwrap's minimal `/dev` provides this automatically. On older kernels (e.g. 4.15 on current gizmo nodes), you must enable `BIND_DEV_PTS=true` in `sandbox.conf`. This binds the host's `/dev` into the sandbox, which on kernels < 6.2 exposes a TIOCSTI escape risk (see Known Limitations and [Admin Hardening](ADMIN_HARDENING.md)).
+
+```bash
+# Start sandbox with nested tmux:
+~/.claude/sandbox/sandbox-exec.sh -- tmux new-session claude
+```
+
+The nested tmux uses **`Ctrl-a`** as prefix (instead of `Ctrl-b`) to avoid conflicts with the outer session. A minimal `sandbox-tmux.conf` is used instead of your `~/.tmux.conf` — custom configs with `run-shell` plugins may reference paths hidden by the sandbox. Edit `~/.claude/sandbox/sandbox-tmux.conf` to customize.
 
 ---
 
@@ -527,7 +528,7 @@ The sandbox auto-detects the best available backend (bwrap → firejail → land
 | Backend | Limitation | Mitigation |
 |---|---|---|
 | **bwrap/Firejail** | `/tmp` isolated by default (`PRIVATE_TMP=true`) — breaks MPI shared-memory transport and NCCL inter-GPU sockets | Set `PRIVATE_TMP=false` in `sandbox.conf` for HPC multi-process workloads |
-| **bwrap** | Host `/dev` exposure for tmux — on kernels < 5.4, bwrap's minimal `/dev` has broken pty allocation (user-namespace devpts gets `ptmxmode=000`), so `--dev-bind /dev /dev` is used instead, exposing host `/dev/pts`. On kernels < 6.2, a sandboxed process could use the `TIOCSTI` ioctl to inject keystrokes into unsandboxed same-user terminals | `BIND_DEV_PTS=auto` (default): uses `--dev-bind /dev` only on kernels < 5.4 (needed) or >= 6.2 (safe — TIOCSTI disabled). Kernels 5.4–6.1 use `--dev /dev` (minimal, no TIOCSTI risk). Set to `true`/`false` to override |
+| **bwrap** | Host `/dev` exposure when `BIND_DEV_PTS=true` — required for tmux on kernels < 5.4 (bwrap's devpts gets `ptmxmode=000`). Exposes host `/dev/pts`; on kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals outside the sandbox | Default `false` (safe). Set `BIND_DEV_PTS=true` in `sandbox.conf` only if you need tmux inside the sandbox. Upgrade to kernel >= 5.4 to avoid the need, or >= 6.2 to disable TIOCSTI entirely |
 | **bwrap** | No seccomp filter by default — bwrap supports `--seccomp` but does not enable it out of the box. Without seccomp, dangerous syscalls like `ptrace`, `process_vm_writev`, `kexec_load`, and `io_uring_setup` remain available. Adding a seccomp policy is harder than with firejail (requires a BPF binary, not a simple drop list) | Use firejail or Landlock for syscall filtering. PID namespace (`--unshare-pid`) mitigates `ptrace`/`process_vm_*` attacks. See [Admin Hardening](ADMIN_HARDENING.md) for io_uring/kexec |
 | **All** | `memfd_create`, `userfaultfd`, `process_vm_readv/writev` not blocked by any backend (HPC compatibility) | Accepted trade-off — needed by CUDA, MPI, Java GC. `process_vm_readv/writev` mitigated by PID namespace in bwrap/firejail. See [Admin Hardening](ADMIN_HARDENING.md) |
 | **Landlock** | Cannot block `AF_UNIX connect()` — agent can reach D-Bus, systemd sockets | Use bwrap or firejail; or see [Admin Hardening](ADMIN_HARDENING.md) |

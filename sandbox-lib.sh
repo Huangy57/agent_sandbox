@@ -82,17 +82,11 @@ PRIVATE_TMP=true
 # landlock: not supported (no mount namespace).
 FILTER_PASSWD=true
 
-# Use --dev-bind /dev /dev instead of --dev /dev (bwrap only).
-# On kernels < 5.4, bwrap's --dev creates a user-namespace devpts with
-# ptmxmode=000, breaking pty allocation (tmux "lost server"). Using
-# --dev-bind /dev /dev preserves the host's /dev/ptmx and devpts.
-# On kernels < 6.2 this exposes host /dev/pts — a same-user process
-# could use TIOCSTI to inject keystrokes into unsandboxed terminals.
-#
-# Default "auto": --dev-bind /dev on kernels < 5.4 (needed) or
-# >= 6.2 (safe — TIOCSTI disabled). --dev /dev on kernels 5.4–6.1
-# (ptys work, avoids TIOCSTI risk). Set to "true"/"false" to override.
-BIND_DEV_PTS=auto
+# Bind host /dev into the sandbox instead of bwrap's minimal devtmpfs.
+# Required for tmux (pty allocation) on kernels < 5.4. Exposes host
+# /dev/pts — on kernels < 6.2 a same-user process could use TIOCSTI
+# to inject keystrokes into unsandboxed terminals. See sandbox.conf.
+BIND_DEV_PTS=false
 
 # Path to the Slurm bypass token file.  bwrap/firejail hide it inside
 # the sandbox.  If empty and /etc/slurm/sandbox-wrapper.conf exists,

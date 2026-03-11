@@ -41,36 +41,12 @@ backend_prepare() {
     # --- Kernel filesystems ---
     BWRAP_ARGS+=(--proc /proc)
 
-    # /dev setup: bwrap's --dev /dev creates a minimal devtmpfs with its
-    # own devpts instance.  On kernels < 5.4, the new devpts has
-    # ptmxmode=000 (kernel restriction on user-namespace devpts), making
-    # /dev/ptmx unusable — tmux and any pty allocation fail.
-    #
-    # BIND_DEV_PTS (default "auto") controls whether to use --dev-bind
-    # /dev /dev (host /dev, working ptys) instead of --dev /dev (minimal,
-    # broken ptys on old kernels).  This exposes host /dev/pts, which on
-    # kernels < 6.2 allows TIOCSTI keystroke injection into same-user
-    # terminals outside the sandbox.
-    #
-    # Auto logic:
-    #   Kernel < 5.4  → --dev-bind /dev (needed, TIOCSTI risk accepted)
-    #   Kernel 5.4–6.1 → --dev /dev   (ptys work, avoid TIOCSTI risk)
-    #   Kernel >= 6.2  → --dev-bind /dev (safe, TIOCSTI disabled)
-    local _bind_devpts="${BIND_DEV_PTS:-auto}"
-    if [[ "$_bind_devpts" == "auto" ]]; then
-        local _kver _kmajor _kminor
-        _kver="$(uname -r)"
-        _kmajor="${_kver%%.*}"
-        _kminor="${_kver#*.}"; _kminor="${_kminor%%.*}"
-        if (( _kmajor < 5 || (_kmajor == 5 && _kminor < 4) )); then
-            _bind_devpts=true   # needed for pty allocation
-        elif (( _kmajor > 6 || (_kmajor == 6 && _kminor >= 2) )); then
-            _bind_devpts=true   # safe — TIOCSTI disabled
-        else
-            _bind_devpts=false  # 5.4–6.1: skip to avoid TIOCSTI escape
-        fi
-    fi
-    if [[ "$_bind_devpts" == "true" ]]; then
+    # BIND_DEV_PTS: use host /dev instead of bwrap's minimal devtmpfs.
+    # Required for tmux on kernels < 5.4 (bwrap's devpts gets
+    # ptmxmode=000). Exposes host /dev/pts — on kernels < 6.2 this
+    # allows TIOCSTI keystroke injection into same-user terminals.
+    # See sandbox.conf for details.
+    if [[ "${BIND_DEV_PTS:-false}" == "true" ]]; then
         BWRAP_ARGS+=(--dev-bind /dev /dev)
     else
         BWRAP_ARGS+=(--dev /dev)
