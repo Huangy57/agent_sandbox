@@ -315,10 +315,20 @@ json.dump(user, sys.stdout, indent=2)
         esac
         [[ "$name" == *.sandbox-backup.* ]] && continue
         local target="$config_dir/$name"
-        # Skip directories that already exist (may be bind-mounted by
-        # bwrap — replacing them would fail with EBUSY).
+        # If a real directory (not symlink) exists in sandbox-config,
+        # merge its contents into the real ~/.claude/<name> and replace
+        # with a symlink.  This recovers session data that was written
+        # to a stale copy instead of through a symlink.
+        # Skip bwrap bind-mounts (mountpoint) — can't replace those.
         if [[ -d "$target" && ! -L "$target" ]]; then
-            continue
+            if mountpoint -q "$target" 2>/dev/null; then
+                continue
+            fi
+            # Merge: copy contents into the real directory, skip duplicates
+            if [[ -d "$item" ]]; then
+                cp -rn "$target"/. "$item"/ 2>/dev/null || true
+            fi
+            rm -rf "$target"
         fi
         # If target is a real file (not a symlink) and newer than the
         # outside version, keep it — it was refreshed inside the sandbox.
