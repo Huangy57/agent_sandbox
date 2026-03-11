@@ -56,6 +56,7 @@ HOME_WRITABLE=(
     ".claude"
     ".claude.json"
     ".local/state/claude"
+    ".local/share/claude"
     ".cache"
 )
 
