@@ -677,12 +677,10 @@ if sandbox bash -c 'python3 -c "import pty; pty.openpty(); print(\"pty-ok\")" 2>
         fail "pty allocation returned unexpected output" "$OUTPUT"
     fi
     # tmux test only makes sense if ptys work
-    if sandbox bash -c 'tmux new-session -d -s sandbox-test sleep\ 5 && tmux list-sessions && tmux kill-server'; then
-        if [[ "$OUTPUT" == *"sandbox-test"* ]]; then
-            pass "tmux starts detached session inside sandbox"
-        else
-            fail "tmux session created but not listed" "$OUTPUT"
-        fi
+    sandbox bash -c 'tmux new-session -d -s sandbox-test sleep\ 5 && tmux list-sessions && tmux kill-server' || true
+    # Check output, not exit code — firejail sends SIGHUP on cleanup (exit 129)
+    if [[ "$OUTPUT" == *"sandbox-test"* ]]; then
+        pass "tmux starts detached session inside sandbox"
     else
         fail "tmux failed to start inside sandbox" "$OUTPUT"
     fi

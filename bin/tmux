@@ -15,7 +15,7 @@ fi
 # sandbox gets a fresh /tmp, and older tmux versions (≤ 2.6) don't
 # create /tmp/tmux-<uid>/ themselves.
 _sockdir="/tmp/tmux-$(id -u)"
-[[ -d "$_sockdir" ]] || mkdir -p "$_sockdir"
+[[ -d "$_sockdir" ]] || mkdir -m 700 -p "$_sockdir"
 
 if [[ -f "$_conf" ]]; then
     exec /usr/bin/tmux -f "$_conf" "$@"

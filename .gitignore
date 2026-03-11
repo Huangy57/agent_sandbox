@@ -3,6 +3,7 @@
 .settings-overlay
 .sbatch-overlay
 .srun-overlay
+.passwd-filter/
 
 # Slurm job output from testing
 slurm-*.out

@@ -55,7 +55,7 @@ backend_prepare() {
     # /tmp isolation: default is private tmpfs. Set PRIVATE_TMP=false in
     # sandbox.conf for MPI/NCCL workloads that need shared /tmp.
     if [[ "${PRIVATE_TMP:-true}" == "true" ]]; then
-        BWRAP_ARGS+=(--tmpfs /tmp)
+        BWRAP_ARGS+=(--tmpfs /tmp --chmod 1777 /tmp)
     else
         BWRAP_ARGS+=(--bind /tmp /tmp)
     fi

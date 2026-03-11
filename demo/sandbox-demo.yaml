@@ -1,0 +1,47 @@
+# Lima VM: sandbox demo with Slurm + LDAP (no admin hardening)
+#
+# Usage:
+#   limactl create --name sandbox-demo demo/sandbox-demo.yaml
+#   limactl start sandbox-demo
+#   limactl shell sandbox-demo
+#
+# Provisioning runs automatically on first boot via the inline script
+# which calls the full provision.sh from the mounted repo.
+#
+# Then test all three backends:
+#   cd ~/agent_container && ./install.sh
+#   ./test.sh
+
+minimumLimaVersion: "2.0.0"
+
+images:
+- location: https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img
+  arch: aarch64
+- location: https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img
+  arch: x86_64
+
+cpus: 4
+memory: 4GiB
+disk: 20GiB
+
+mounts:
+- location: "~"
+  writable: true
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux
+    # Lima mounts the host ~ at the original macOS path (/Users/...)
+    # or the Linux path (/home/...).  Try both.
+    for base in /Users /home; do
+        for d in "$base"/*/gits/agent_container/demo/provision.sh; do
+            if [[ -f "$d" ]]; then
+                exec bash "$d"
+            fi
+        done
+    done
+    echo "ERROR: Cannot find demo/provision.sh in any home directory mount."
+    echo "Make sure the repo is at ~/gits/agent_container on the host."
+    exit 1
