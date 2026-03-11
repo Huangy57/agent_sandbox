@@ -184,10 +184,18 @@ generate_filtered_passwd() {
     local my_uid
     my_uid="$(id -u)"
 
-    # Minimal passwd: system accounts (UID < 1000) + current user +
-    # service users required by tools available inside the sandbox
-    # (slurm/munge for Slurm commands).
-    awk -F: "(\$3 < 1000) || (\$3 == $my_uid) || (\$1 == \"slurm\") || (\$1 == \"munge\")" /etc/passwd > "$tmpdir/passwd"
+    # Minimal passwd: system accounts (UID < 1000) + current user.
+    # Source is the local /etc/passwd file (not getent, which would
+    # pull all LDAP/AD users — exactly what we're trying to prevent).
+    awk -F: "(\$3 < 1000) || (\$3 == $my_uid)" /etc/passwd > "$tmpdir/passwd"
+
+    # Append service users that Slurm needs to resolve (SlurmUser,
+    # MungeUser).  These may be LDAP-only, so fetch via getent.
+    for _svc_user in slurm munge; do
+        if ! grep -q "^${_svc_user}:" "$tmpdir/passwd"; then
+            getent passwd "$_svc_user" >> "$tmpdir/passwd" 2>/dev/null || true
+        fi
+    done
 
     # nsswitch.conf: replace ldap/sss/compat with files-only for passwd/group
     if [[ -f /etc/nsswitch.conf ]]; then
