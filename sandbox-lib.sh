@@ -291,6 +291,11 @@ json.dump(user, sys.stdout, indent=2)
         esac
         [[ "$name" == *.sandbox-backup.* ]] && continue
         local target="$config_dir/$name"
+        # Skip directories that already exist (may be bind-mounted by
+        # bwrap — replacing them would fail with EBUSY).
+        if [[ -d "$target" && ! -L "$target" ]]; then
+            continue
+        fi
         # If target is a real file (not a symlink) and newer than the
         # outside version, keep it — it was refreshed inside the sandbox.
         if [[ -e "$target" && ! -L "$target" && "$target" -nt "$item" ]]; then
