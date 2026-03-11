@@ -107,7 +107,7 @@ The Landlock backend also installs a **seccomp filter** that blocks dangerous sy
 
 #### Seccomp filter — HPC compatibility trade-offs
 
-The Landlock seccomp filter blocks `io_uring` and `kexec_load/kexec_file_load`. The `io_uring` block is the main security value — it has a [large kernel attack surface](https://security.googleblog.com/2023/06/learnings-from-kctf-vrps-42-linux.html) and is not needed by Claude Code itself. However, it is used by tools that an agent might invoke on behalf of the user:
+The Landlock seccomp filter blocks `io_uring` and `kexec_load/kexec_file_load`. The `io_uring` block is the main security value. It has a [large kernel attack surface](https://security.googleblog.com/2023/06/learnings-from-kctf-vrps-42-linux.html) and is not needed by Claude Code itself. [Docker's default seccomp profile](https://github.com/moby/moby/pull/46762) also blocks `io_uring` since version 25.0, citing Google's research. However, `io_uring` is used by tools that an agent might invoke on behalf of the user:
 
 | Tool | Uses `io_uring` | Reference |
 |---|---|---|
@@ -122,10 +122,10 @@ Several other syscalls were **intentionally kept unblocked** to avoid breaking l
 | Syscall | Used by | Security risk (accepted) |
 |---|---|---|
 | `memfd_create` | [CUDA](https://developer.nvidia.com/cuda-toolkit) / [ROCm](https://rocm.docs.amd.com/) GPU drivers, [PyTorch](https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/MapAllocator.cpp) shared memory, [Numba](https://numba.pydata.org/) JIT, [JAX](https://github.com/jax-ml/jax)/[XLA](https://openxla.org/xla) compiler, [OpenJDK ZGC](https://github.com/openjdk/jdk/blob/master/src/hotspot/os/linux/gc/z/zPhysicalMemoryBacking_linux.cpp) | Anonymous executable memory regions |
-| `userfaultfd` | [Java ZGC](https://wiki.openjdk.org/display/zgc) and [Shenandoah](https://wiki.openjdk.org/display/shenandoah) GC, [QEMU live migration](https://www.qemu.org/docs/master/devel/migration.html) | Kernel race exploitation ([CVE-2021-22555](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-22555) and others) |
+| `userfaultfd` | [QEMU live migration](https://www.qemu.org/docs/master/devel/migration.html) (postcopy), [CRIU](https://github.com/checkpoint-restore/criu/blob/master/criu/uffd.c) (checkpoint/restore). Note: Java ZGC historically used this (pre-JDK 17) but now uses `memfd_create` instead. Docker's default seccomp profile has [always blocked `userfaultfd`](https://github.com/moby/moby/commit/96896f2d) and Java works fine in containers. | Kernel race exploitation ([CVE-2021-22555](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-22555) and others) |
 | `process_vm_readv/writev` | [OpenMPI](https://github.com/open-mpi/ompi/blob/main/opal/mca/smsc/cma/smsc_cma_module.c) CMA transport, [strace](https://github.com/strace/strace), [gdb](https://sourceware.org/gdb/) | Cross-process memory access (mitigated by PID namespace in bwrap/firejail) |
 
-Blocking `memfd_create` would silently break CUDA, PyTorch DataLoader (shared-memory IPC), Numba-compiled functions, and JAX/XLA-compiled models. Blocking `userfaultfd` would break Java tools using ZGC (default GC since JDK 15). Blocking `process_vm_readv` would break MPI CMA shared-memory transport used by multi-rank `sbatch` jobs. The filesystem sandbox (Landlock rules) remains the primary isolation mechanism — seccomp is defense-in-depth only.
+Blocking `memfd_create` would silently break CUDA, PyTorch DataLoader (shared-memory IPC), Numba-compiled functions, and JAX/XLA-compiled models. Docker's default seccomp profile also [allows `memfd_create`](https://github.com/moby/profiles/blob/main/seccomp/default.json) unconditionally, confirming it cannot be blocked without breaking common workloads. `userfaultfd` could likely be blocked safely (Docker has always blocked it, and modern Java ZGC no longer needs it), but it remains allowed for QEMU postcopy migration and CRIU checkpoint/restore, which are relevant in HPC. Blocking `process_vm_readv` would break MPI CMA shared-memory transport used by multi-rank `sbatch` jobs (Docker [allows it on kernel >= 4.8](https://github.com/moby/moby/commit/dca15781)). The filesystem sandbox (Landlock rules) remains the primary isolation mechanism; seccomp is defense-in-depth only.
 
 ### Choosing a backend on Ubuntu 24.04+ nodes
 
@@ -192,7 +192,7 @@ The sandbox auto-detects bwrap from `$PATH`, or admins can set `BWRAP=/path/to/b
 
 bwrap supports `--seccomp FD` to load a BPF syscall filter. The Landlock backend uses a seccomp filter as **defense-in-depth** because it lacks mount namespace isolation — seccomp compensates for weaker primary isolation. bwrap does not have this problem: mount namespace + PID namespace + `no_new_privs` already provide strong containment.
 
-After accounting for HPC compatibility (keeping `memfd_create` for GPU/JIT, `userfaultfd` for JVM GC, `process_vm_readv` for MPI — see [trade-offs below](#seccomp-filter--hpc-compatibility-trade-offs)), the only syscalls a bwrap seccomp filter would add are:
+After accounting for HPC compatibility (keeping `memfd_create` for GPU/JIT, `process_vm_readv` for MPI, and `userfaultfd` for QEMU/CRIU; see [trade-offs below](#seccomp-filter--hpc-compatibility-trade-offs)), the only syscalls a bwrap seccomp filter would add are:
 
 | Syscall | Blocked by seccomp | Already mitigated by |
 |---|---|---|
