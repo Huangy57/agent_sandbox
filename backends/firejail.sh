@@ -95,12 +95,6 @@ backend_prepare() {
     # multi-process frameworks need shared /tmp for inter-rank communication.
     if [[ "${PRIVATE_TMP:-true}" == "true" ]]; then
         FIREJAIL_ARGS+=(--private-tmp)
-        # Preserve tmux socket so agent teams and tmux work inside the sandbox.
-        # --private-tmp creates a clean tmpfs; whitelist brings the socket back.
-        local _tmux_sock="/tmp/tmux-$(id -u)"
-        if [[ -d "$_tmux_sock" ]]; then
-            FIREJAIL_ARGS+=(--whitelist="$_tmux_sock")
-        fi
     fi
 
     # PID namespace is enabled by default in firejail (no flag needed).

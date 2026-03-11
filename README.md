@@ -365,7 +365,7 @@ The sandbox inherits your shell environment, then:
 | **PID namespace** | Isolated by bwrap (`--unshare-pid`) and firejail (default). Not isolated by Landlock. |
 | **`/run`** | Partially isolated. Firejail blacklists `/run/dbus`, `/run/user`, `/run/systemd/private`, `/run/containerd` but allows munge socket. Bwrap exposes only `/run/munge`. Landlock allows all of `/run`. |
 | **User enumeration** | bwrap/firejail: filtered (`FILTER_PASSWD=true` — bwrap overlays `/etc/passwd` + nsswitch; firejail blocks NSS daemon sockets). Landlock: not filtered. |
-| **tmux** | Socket (`/tmp/tmux-$UID/`) preserved despite `/tmp` isolation — needed for agent teams and interactive tmux use. |
+| **tmux** | Socket (`/tmp/tmux-$UID/`) blocked by `/tmp` isolation — exposing it would allow sandbox escape via the unsandboxed tmux server. A fresh `tmux` inside the sandbox works (creates its own server in isolated `/tmp`). |
 
 ---
 

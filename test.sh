@@ -641,14 +641,14 @@ else
     skip "/tmp isolation — Landlock has no mount namespace"
 fi
 
-# tmux socket preserved despite /tmp isolation (needed for Claude Code agent teams)
+# tmux socket blocked (exposing it would allow sandbox escape via tmux server)
 _tmux_sock="/tmp/tmux-$(id -u)"
 if [[ -d "$_tmux_sock" ]] && has_mount_ns; then
     if sandbox bash -c "test -d '$_tmux_sock' && echo VISIBLE || echo HIDDEN"; then
-        if [[ "$OUTPUT" == "VISIBLE" ]]; then
-            pass "tmux socket preserved in isolated /tmp"
+        if [[ "$OUTPUT" == "HIDDEN" ]]; then
+            pass "tmux socket blocked (prevents escape via tmux server)"
         else
-            fail "tmux socket hidden (breaks Claude Code agent teams)" "$OUTPUT"
+            fail "tmux socket exposed (sandbox escape risk)" "$OUTPUT"
         fi
     fi
 elif [[ ! -d "$_tmux_sock" ]]; then
