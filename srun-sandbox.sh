@@ -84,15 +84,5 @@ if [[ ${#USER_CMD[@]} -eq 0 ]]; then
     exec "$REAL_SRUN" "${SRUN_FLAGS[@]}"
 fi
 
-detect_backend
-prepare_config_dir
-backend_prepare "$PROJECT_DIR"
-
-if [[ "$SANDBOX_BACKEND" == "bwrap" ]]; then
-    exec "$REAL_SRUN" "${SRUN_FLAGS[@]}" \
-        "$BWRAP" "${BWRAP_ARGS[@]}" -- "${USER_CMD[@]}"
-else
-    # For landlock: run sandbox-exec.sh on the compute node
-    exec "$REAL_SRUN" "${SRUN_FLAGS[@]}" \
-        "$SCRIPT_DIR/sandbox-exec.sh" --project-dir "$PROJECT_DIR" -- "${USER_CMD[@]}"
-fi
+exec "$REAL_SRUN" "${SRUN_FLAGS[@]}" \
+    "$SCRIPT_DIR/sandbox-exec.sh" --project-dir "$PROJECT_DIR" -- "${USER_CMD[@]}"

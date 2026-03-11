@@ -46,6 +46,11 @@ backend_prepare() {
     # sandbox.conf for MPI/NCCL workloads that need shared /tmp.
     if [[ "${PRIVATE_TMP:-true}" == "true" ]]; then
         BWRAP_ARGS+=(--tmpfs /tmp)
+        # Preserve tmux socket so agent teams and tmux work inside the sandbox
+        local _tmux_sock="/tmp/tmux-$(id -u)"
+        if [[ -d "$_tmux_sock" ]]; then
+            BWRAP_ARGS+=(--bind "$_tmux_sock" "$_tmux_sock")
+        fi
     else
         BWRAP_ARGS+=(--bind /tmp /tmp)
     fi

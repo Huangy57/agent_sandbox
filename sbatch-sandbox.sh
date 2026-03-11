@@ -100,7 +100,7 @@ ${SBATCH_DIRECTIVES}
 
 # --- Sandbox wrapper (auto-generated) ---
 # Original script: $SCRIPT_PATH
-exec "$SANDBOX_EXEC" --project-dir "$PROJECT_DIR" -- bash "$SCRIPT_PATH" ${SCRIPT_ARGS[*]+"${SCRIPT_ARGS[*]}"}
+exec "$SANDBOX_EXEC" --project-dir "$PROJECT_DIR" -- "$SCRIPT_PATH" ${SCRIPT_ARGS[*]+"${SCRIPT_ARGS[*]}"}
 WRAPPER_EOF
 
     chmod +x "$WRAPPER"
