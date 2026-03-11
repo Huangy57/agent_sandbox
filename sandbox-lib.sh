@@ -185,25 +185,22 @@ generate_filtered_passwd() {
     local my_uid
     my_uid="$(id -u)"
 
-    # Minimal passwd: system accounts (UID < 1000) + current user.
-    # Source is the local /etc/passwd file (not getent, which would
-    # pull all LDAP/AD users — exactly what we're trying to prevent).
-    awk -F: "(\$3 < 1000) || (\$3 == $my_uid)" /etc/passwd > "$tmpdir/passwd"
+    # Minimal passwd: system accounts (UID < 1000) from the local file.
+    # Does NOT use getent for the base set (that would pull all LDAP users).
+    awk -F: '($3 < 1000)' /etc/passwd > "$tmpdir/passwd"
 
-    # Append current user and service users via getent if they're not
-    # in the local /etc/passwd (common on LDAP/AD systems).
-    for _svc_user in "$(id -un)" slurm munge; do
+    # Append specific users via getent (handles both local and LDAP).
+    # Current user + service users needed by tools inside the sandbox.
+    for _svc_user in "$(id -un)" slurm munge nobody; do
         if ! grep -q "^${_svc_user}:" "$tmpdir/passwd"; then
             getent passwd "$_svc_user" >> "$tmpdir/passwd" 2>/dev/null || true
         fi
     done
 
-    # Minimal group: system groups (GID < 1000) + current user's groups.
-    local my_gid
-    my_gid="$(id -g)"
-    awk -F: "(\$3 < 1000) || (\$3 == $my_gid)" /etc/group > "$tmpdir/group"
+    # Minimal group: system groups (GID < 1000) from the local file.
+    awk -F: '($3 < 1000)' /etc/group > "$tmpdir/group"
 
-    # Append all of the current user's groups and service groups via getent
+    # Append all of the current user's groups and service groups via getent.
     for _svc_gid in $(id -G) $(getent passwd slurm 2>/dev/null | cut -d: -f4) $(getent passwd munge 2>/dev/null | cut -d: -f4); do
         if ! grep -q "^[^:]*:[^:]*:${_svc_gid}:" "$tmpdir/group"; then
             getent group "$_svc_gid" >> "$tmpdir/group" 2>/dev/null || true
