@@ -136,6 +136,10 @@ bash test.sh --verbose   # show details on failure
 Add this to your `.bashrc` or `.zshrc` for quick access:
 
 ```bash
+# With tmux (enables agent teams):
+alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- tmux new-session claude'
+
+# Without tmux:
 alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'
 ```
 
@@ -161,9 +165,11 @@ That's it. Claude starts in your project directory with full read access to the 
 Claude Code agent teams require tmux. The outer tmux socket is blocked because the tmux server runs outside the sandbox — any client with socket access could run `tmux new-window 'unsandboxed command'` to escape. Instead, start a nested tmux inside the sandbox:
 
 ```bash
-~/.claude/sandbox/sandbox-exec.sh -- tmux
-# Inside the nested tmux, start Claude:
-claude
+# One-liner (aliasable):
+~/.claude/sandbox/sandbox-exec.sh -- tmux new-session claude
+
+# Suggested alias (add to .bashrc/.zshrc):
+alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- tmux new-session claude'
 ```
 
 The nested tmux uses **`Ctrl-a`** as prefix (instead of `Ctrl-b`) to avoid conflicts with the outer session. Your tmux config is loaded automatically.
