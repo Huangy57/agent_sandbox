@@ -10,6 +10,12 @@
 #
 # Since sandbox scripts live on NFS, they're available on every compute
 # node without extra setup.
+#
+# Flag parsing: this script does NOT maintain a list of sbatch flags.
+# It only looks for --wrap (which it must intercept) and the job script
+# (the first bare positional argument that exists as a file). Flag
+# values are consumed by peeking ahead, making this future-proof
+# against new Slurm versions adding flags.
 
 set -euo pipefail
 
@@ -35,58 +41,97 @@ SANDBOX_EXEC="$SCRIPT_DIR/sandbox-exec.sh"
 # Project dir: inherit from sandbox env, or use $PWD
 PROJECT_DIR="${SANDBOX_PROJECT_DIR:-$(pwd)}"
 
-# Separate sbatch flags from --wrap / script
-SBATCH_FLAGS=()
-WRAP_CMD=""
-SCRIPT_PATH=""
-SCRIPT_ARGS=()
+# ── Parse arguments ─────────────────────────────────────────────
+# Strategy: collect all arguments, looking only for --wrap (which we
+# must intercept). Everything else is kept in order. After the scan,
+# if there's no --wrap, we find the job script by walking the collected
+# arguments with flag-value awareness:
+#   - --long=value forms are self-contained (one arg)
+#   - -x or --long followed by a non-flag arg: the next arg is consumed
+#     as the flag's value (skip it)
+#   - The first bare positional (not consumed as a flag value) that
+#     exists as a regular file is the job script
+# This avoids maintaining a list of which flags consume a value.
 
-parse_done=false
-while [[ $# -gt 0 ]] && [[ "$parse_done" == false ]]; do
+ALL_ARGS=()
+WRAP_CMD=""
+
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --wrap=*)
             WRAP_CMD="${1#--wrap=}"
             shift
             ;;
         --wrap)
-            WRAP_CMD="$2"
+            WRAP_CMD="${2:-}"
             shift 2
             ;;
-        -*)
-            SBATCH_FLAGS+=("$1")
-            # Flags that consume a value argument
-            case "$1" in
-                -A|-p|-n|-c|-t|-J|-o|-e|-N|-D|--account|--partition|--ntasks|--cpus-per-task|--time|--job-name|--output|--error|--nodes|--mem|--gres|--constraint|--export|--dependency|--array|--mail-type|--mail-user|--qos|--chdir)
-                    if [[ $# -gt 1 ]]; then
-                        SBATCH_FLAGS+=("$2")
-                        shift
-                    fi
-                    ;;
-            esac
-            shift
-            ;;
         *)
-            SCRIPT_PATH="$1"
+            ALL_ARGS+=("$1")
             shift
-            SCRIPT_ARGS=("$@")
-            parse_done=true
             ;;
     esac
 done
 
 if [[ -n "$WRAP_CMD" ]]; then
     # --wrap mode: wrap the command in sandbox
-    exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" \
-        --wrap="$SANDBOX_EXEC --project-dir '$PROJECT_DIR' -- bash -c '${WRAP_CMD//\'/\'\\\'\'}'"
+    exec "$REAL_SBATCH" "${ALL_ARGS[@]}" \
+        --wrap="$SANDBOX_EXEC --project-dir '$PROJECT_DIR' -- sh -c '${WRAP_CMD//\'/\'\\\'\'}'"
 
-elif [[ -n "$SCRIPT_PATH" ]]; then
-    # Script mode: create a wrapper that runs the original inside sandbox
-    SCRIPT_PATH="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/$(basename "$SCRIPT_PATH")"
+else
+    # Script mode: find the job script among the collected arguments.
+    SBATCH_FLAGS=()
+    SCRIPT_PATH=""
+    SCRIPT_ARGS=()
+    skip_next=false
 
-    if [[ ! -f "$SCRIPT_PATH" ]]; then
-        echo "Error: Script not found: $SCRIPT_PATH" >&2
+    for ((i=0; i<${#ALL_ARGS[@]}; i++)); do
+        arg="${ALL_ARGS[$i]}"
+
+        if $skip_next; then
+            # This argument is consumed as the previous flag's value
+            SBATCH_FLAGS+=("$arg")
+            skip_next=false
+            continue
+        fi
+
+        case "$arg" in
+            --*=*)
+                # Long option with inline value (e.g., --mem=4G)
+                SBATCH_FLAGS+=("$arg")
+                ;;
+            -*)
+                # Flag that may consume the next argument as its value.
+                # If the next arg doesn't start with -, assume it's this
+                # flag's value. This safely skips values like "-o output.log"
+                # or "-p gpu" without needing a flag list.
+                SBATCH_FLAGS+=("$arg")
+                if [[ $((i+1)) -lt ${#ALL_ARGS[@]} && "${ALL_ARGS[$((i+1))]}" != -* ]]; then
+                    skip_next=true
+                fi
+                ;;
+            *)
+                # Bare positional argument not consumed as a flag value.
+                if [[ -f "$arg" ]]; then
+                    SCRIPT_PATH="$arg"
+                    SCRIPT_ARGS=("${ALL_ARGS[@]:$((i+1))}")
+                    break
+                else
+                    SBATCH_FLAGS+=("$arg")
+                fi
+                ;;
+        esac
+    done
+
+    if [[ -z "$SCRIPT_PATH" ]]; then
+        echo "Error: No --wrap command or script specified." >&2
+        echo "Usage:" >&2
+        echo "  sbatch-sandbox.sh [sbatch-flags] --wrap='command'" >&2
+        echo "  sbatch-sandbox.sh [sbatch-flags] script.sh [args]" >&2
         exit 1
     fi
+
+    SCRIPT_PATH="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/$(basename "$SCRIPT_PATH")"
 
     # Extract #SBATCH directives from the original script
     SBATCH_DIRECTIVES=$(grep '^#SBATCH' "$SCRIPT_PATH" || true)
@@ -105,11 +150,4 @@ WRAPPER_EOF
 
     chmod +x "$WRAPPER"
     exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" "$WRAPPER"
-
-else
-    echo "Error: No --wrap command or script specified." >&2
-    echo "Usage:" >&2
-    echo "  sbatch-sandbox.sh [sbatch-flags] --wrap='command'" >&2
-    echo "  sbatch-sandbox.sh [sbatch-flags] script.sh [args]" >&2
-    exit 1
 fi
