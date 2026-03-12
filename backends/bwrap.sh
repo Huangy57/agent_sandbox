@@ -91,7 +91,9 @@ SLURM_EOF
         fi
     done
 
-    if [[ -n "$DOTFILES_DIR" && -d "$DOTFILES_DIR" ]]; then
+    if [[ -n "$DOTFILES_DIR" && -d "$DOTFILES_DIR" && ${#HOME_SYMLINKS[@]} -gt 0 ]]; then
+        # Mount the dotfiles directory so symlinks have a valid target.
+        BWRAP_ARGS+=(--ro-bind "$DOTFILES_DIR" "$DOTFILES_DIR")
         for name in "${HOME_SYMLINKS[@]}"; do
             if [[ -e "$DOTFILES_DIR/$name" ]]; then
                 BWRAP_ARGS+=(--symlink "$DOTFILES_DIR/$name" "$HOME/$name")
@@ -118,6 +120,14 @@ SLURM_EOF
 
     # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
     # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
+    # Protect the REAL CLAUDE.md from modification — the agent should only
+    # write to the sandbox-config copy (via CLAUDE_CONFIG_DIR). Without this,
+    # a compromised agent could inject persistent instructions into the user's
+    # real CLAUDE.md that affect all future sessions (persistence attack).
+    local _real_claude_md="$HOME/.claude/CLAUDE.md"
+    if [[ -f "$_real_claude_md" ]]; then
+        BWRAP_ARGS+=(--ro-bind "$_real_claude_md" "$_real_claude_md")
+    fi
 
     for blocked in "${BLOCKED_FILES[@]}"; do
         if [[ -e "$blocked" ]]; then

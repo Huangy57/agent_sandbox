@@ -74,9 +74,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$WRAP_CMD" ]]; then
-    # --wrap mode: wrap the command in sandbox
+    # --wrap mode: wrap the command in sandbox.
+    # Use printf %q to safely escape the wrap command for shell evaluation.
+    _escaped_cmd=$(printf '%q' "$WRAP_CMD")
     exec "$REAL_SBATCH" "${ALL_ARGS[@]}" \
-        --wrap="$SANDBOX_EXEC --project-dir '$PROJECT_DIR' -- sh -c '${WRAP_CMD//\'/\'\\\'\'}'"
+        --wrap="$SANDBOX_EXEC --project-dir $(printf '%q' "$PROJECT_DIR") -- sh -c $_escaped_cmd"
 
 else
     # Script mode: find the job script among the collected arguments.
@@ -139,14 +141,20 @@ else
     WRAPPER=$(mktemp /tmp/sbatch-sandbox-XXXXXX.sh)
     trap "rm -f '$WRAPPER'" EXIT
 
-    cat > "$WRAPPER" <<WRAPPER_EOF
-#! /bin/bash --
-${SBATCH_DIRECTIVES}
-
-# --- Sandbox wrapper (auto-generated) ---
-# Original script: $SCRIPT_PATH
-exec "$SANDBOX_EXEC" --project-dir "$PROJECT_DIR" -- "$SCRIPT_PATH" ${SCRIPT_ARGS[*]+"${SCRIPT_ARGS[*]}"}
-WRAPPER_EOF
+    # Use a quoted heredoc to prevent expansion of SBATCH directive
+    # contents (defense against $(cmd) in #SBATCH --comment="$(cmd)").
+    # Variables for the exec line are written via printf.
+    {
+        printf '#!/bin/bash --\n'
+        printf '%s\n' "$SBATCH_DIRECTIVES"
+        printf '\n# --- Sandbox wrapper (auto-generated) ---\n'
+        printf 'exec %q --project-dir %q -- %q' \
+            "$SANDBOX_EXEC" "$PROJECT_DIR" "$SCRIPT_PATH"
+        for _sa in "${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"}"; do
+            printf ' %q' "$_sa"
+        done
+        printf '\n'
+    } > "$WRAPPER"
 
     chmod +x "$WRAPPER"
     exec "$REAL_SBATCH" "${SBATCH_FLAGS[@]}" "$WRAPPER"

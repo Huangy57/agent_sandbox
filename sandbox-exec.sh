@@ -122,4 +122,17 @@ if [[ "$DRY_RUN" == true ]]; then
     exit 0
 fi
 
+# Close inherited file descriptors (3+) to prevent FD-based sandbox bypass.
+# Open FDs from the parent process persist across exec and bypass filesystem
+# isolation — a parent-opened FD to /etc/shadow would remain readable inside
+# the sandbox even if the path is blocked.  Keep only stdin/stdout/stderr.
+if [[ -d /proc/self/fd ]]; then
+    for _fd in /proc/self/fd/*; do
+        _fd_num="${_fd##*/}"
+        if [[ "$_fd_num" -gt 2 ]] 2>/dev/null; then
+            eval "exec ${_fd_num}>&-" 2>/dev/null || true
+        fi
+    done
+fi
+
 backend_exec "$@"

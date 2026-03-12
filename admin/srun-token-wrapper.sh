@@ -63,12 +63,14 @@ fi
 
 # Inode drift check: warn if the token file's identity has changed.
 if [[ -f "${TOKEN_FILE}.identity" && -f "$TOKEN_FILE" ]]; then
-    _cur_dev=$(python3 -c "import os; st=os.stat('$TOKEN_FILE'); print((os.major(st.st_dev)<<20)|os.minor(st.st_dev))" 2>/dev/null || echo "")
+    _cur_dev=$(python3 -c "import os,sys; st=os.stat(sys.argv[1]); print((os.major(st.st_dev)<<20)|os.minor(st.st_dev))" "$TOKEN_FILE" 2>/dev/null || echo "")
     _cur_ino=$(stat -c %i "$TOKEN_FILE" 2>/dev/null || echo "")
     _expected=$(cat "${TOKEN_FILE}.identity" 2>/dev/null || echo "")
     if [[ -n "$_cur_dev" && -n "$_cur_ino" && "$_expected" != "$_cur_dev $_cur_ino" ]]; then
-        echo "WARNING: Token file identity changed since eBPF was loaded." >&2
+        echo "FATAL: Token file identity changed since eBPF was loaded." >&2
+        echo "  eBPF protects the old inode, not the current file." >&2
         echo "  Re-run: sudo admin/load-token-protect.sh" >&2
+        exit 1
     fi
 fi
 

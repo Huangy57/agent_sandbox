@@ -97,10 +97,16 @@ AUDIT_ARCH_AARCH64 = 0xC00000B7
 #   process_vm_writev  transfer on same node), debuggers (gdb, strace).
 #                      Risk: can read/write memory of same-UID processes
 #                      (mitigated by PID namespace in bwrap/firejail).
+#                      Blocked on Landlock because it has no PID namespace.
+#                      If MPI CMA transport is needed, remove from blocklist.
 #
-# These were removed from the blocklist to avoid breaking GPU compute,
-# MPI multi-rank jobs, and JVM-based workloads. The filesystem sandbox
-# (Landlock rules) remains the primary isolation mechanism.
+#   ptrace           — debugger attach. Without PID namespace (Landlock),
+#                      an agent could ptrace sibling processes to extract
+#                      memory (e.g., bypass tokens from sbatch wrappers).
+#                      Blocked on Landlock; bwrap/firejail have PID ns.
+#
+# memfd_create and userfaultfd are NOT blocked (GPU compute, CUDA, QEMU).
+# The filesystem sandbox (Landlock rules) remains the primary isolation.
 _BLOCKED_SYSCALLS = {
     AUDIT_ARCH_X86_64: {
         "io_uring_setup":      425,
@@ -108,6 +114,9 @@ _BLOCKED_SYSCALLS = {
         "io_uring_register":   427,
         "kexec_load":          246,
         "kexec_file_load":     320,
+        "ptrace":              101,
+        "process_vm_readv":    310,
+        "process_vm_writev":   311,
     },
     AUDIT_ARCH_AARCH64: {
         "io_uring_setup":      425,
@@ -115,6 +124,9 @@ _BLOCKED_SYSCALLS = {
         "io_uring_register":   427,
         "kexec_load":          104,
         "kexec_file_load":     294,
+        "ptrace":              117,
+        "process_vm_readv":    270,
+        "process_vm_writev":   271,
     },
 }
 

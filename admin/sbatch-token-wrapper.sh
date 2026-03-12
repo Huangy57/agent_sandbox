@@ -47,16 +47,35 @@ if [[ "$_self" == "$_target" ]]; then
     exit 1
 fi
 
-# Strip any _SANDBOX_BYPASS from --export= flags (prevent manual injection
+# Strip any _SANDBOX_BYPASS from --export flags (prevent manual injection
 # via command line, which would be visible in the process table).
+# Handles both --export=VAL and --export VAL (space-separated) forms.
+_strip_bypass() {
+    local val="$1"
+    val=$(echo "$val" | sed 's/,\?_SANDBOX_BYPASS=[^,]*//g' | sed 's/^,//')
+    echo "$val"
+}
+
 ARGS=()
+_next_is_export=false
 for arg in "$@"; do
+    if $_next_is_export; then
+        _next_is_export=false
+        _cleaned=$(_strip_bypass "$arg")
+        if [[ -n "$_cleaned" ]]; then
+            ARGS+=("--export=$_cleaned")
+        fi
+        continue
+    fi
     case "$arg" in
         --export=*)
-            cleaned=$(echo "${arg#--export=}" | sed 's/,\?_SANDBOX_BYPASS=[^,]*//' | sed 's/^,//')
-            if [[ -n "$cleaned" ]]; then
-                ARGS+=("--export=$cleaned")
+            _cleaned=$(_strip_bypass "${arg#--export=}")
+            if [[ -n "$_cleaned" ]]; then
+                ARGS+=("--export=$_cleaned")
             fi
+            ;;
+        --export)
+            _next_is_export=true
             ;;
         *)
             ARGS+=("$arg")
@@ -77,12 +96,14 @@ fi
 # Inode drift check: warn if the token file's identity has changed since
 # the eBPF program was loaded (e.g., token was regenerated).
 if [[ -f "${TOKEN_FILE}.identity" && -f "$TOKEN_FILE" ]]; then
-    _cur_dev=$(python3 -c "import os; st=os.stat('$TOKEN_FILE'); print((os.major(st.st_dev)<<20)|os.minor(st.st_dev))" 2>/dev/null || echo "")
+    _cur_dev=$(python3 -c "import os,sys; st=os.stat(sys.argv[1]); print((os.major(st.st_dev)<<20)|os.minor(st.st_dev))" "$TOKEN_FILE" 2>/dev/null || echo "")
     _cur_ino=$(stat -c %i "$TOKEN_FILE" 2>/dev/null || echo "")
     _expected=$(cat "${TOKEN_FILE}.identity" 2>/dev/null || echo "")
     if [[ -n "$_cur_dev" && -n "$_cur_ino" && "$_expected" != "$_cur_dev $_cur_ino" ]]; then
-        echo "WARNING: Token file identity changed since eBPF was loaded." >&2
-        echo "  eBPF protects the old inode. Re-run: sudo admin/load-token-protect.sh" >&2
+        echo "FATAL: Token file identity changed since eBPF was loaded." >&2
+        echo "  eBPF protects the old inode, not the current file." >&2
+        echo "  Re-run: sudo admin/load-token-protect.sh" >&2
+        exit 1
     fi
 fi
 

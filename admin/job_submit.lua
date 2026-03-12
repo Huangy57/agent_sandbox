@@ -86,11 +86,20 @@ function slurm_job_submit(job_desc, part_list, submit_uid)
 
     -- Use a heredoc to pass the job body to sandbox-exec.sh.
     -- This avoids Lua/shell quoting issues with single-quote escaping.
+    --
+    -- The delimiter includes the submit UID and a counter to prevent
+    -- heredoc injection: if the user's script contains the delimiter
+    -- string, it would terminate the heredoc early and execute code
+    -- outside the sandbox. A per-submission unique delimiter makes
+    -- this infeasible without knowing the exact string.
     local work_dir = job_desc.work_dir or "/tmp"
     local body = table.concat(body_lines, "\n")
+    local delimiter = string.format("__SANDBOX_EOF_%d_%d__", submit_uid, os.time())
+    -- Belt-and-suspenders: if the body somehow contains the delimiter, escape it
+    body = body:gsub(delimiter, delimiter .. "_ESCAPED")
     local wrapper = string.format(
-        "%s --project-dir %q -- bash <<'__SANDBOX_EOF__'\n%s\n__SANDBOX_EOF__",
-        SANDBOX_EXEC, work_dir, body
+        "%s --project-dir %q -- bash <<'%s'\n%s\n%s",
+        SANDBOX_EXEC, work_dir, delimiter, body, delimiter
     )
 
     job_desc.script = table.concat(preamble, "\n") .. "\n" .. wrapper .. "\n"

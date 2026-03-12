@@ -63,6 +63,7 @@ sandbox() {
         -e '^WARNING: ' \
         -e '^  User enumeration' \
         -e '^  Individual file' \
+        -e '^  Current backend' \
         -e '^Parent pid ' \
         -e '^Child process initialized' \
         -e '^Parent is shutting down')

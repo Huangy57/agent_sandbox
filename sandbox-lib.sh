@@ -164,6 +164,32 @@ fi
 
 # ── Validate config ──────────────────────────────────────────────
 
+# Reject command substitution or backticks in path arrays (defense in depth).
+# The config file is user-owned, but catching these prevents accidental or
+# copy-paste injection of $(cmd) or `cmd` into path values.
+_validate_path_array() {
+    local name="$1"; shift
+    for item in "$@"; do
+        if [[ "$item" =~ \$\( ]] || [[ "$item" =~ \` ]]; then
+            echo "Error: Command substitution in $name: $item" >&2
+            exit 1
+        fi
+    done
+}
+_validate_path_array ALLOWED_PROJECT_PARENTS "${ALLOWED_PROJECT_PARENTS[@]}"
+_validate_path_array READONLY_MOUNTS "${READONLY_MOUNTS[@]}"
+_validate_path_array SCRATCH_MOUNTS "${SCRATCH_MOUNTS[@]}"
+_validate_path_array HOME_READONLY "${HOME_READONLY[@]}"
+_validate_path_array HOME_WRITABLE "${HOME_WRITABLE[@]}"
+_validate_path_array BLOCKED_FILES "${BLOCKED_FILES[@]}"
+_validate_path_array EXTRA_BLOCKED_PATHS "${EXTRA_BLOCKED_PATHS[@]}"
+
+# Fail early if HOME is unset (many paths depend on it).
+if [[ -z "${HOME:-}" ]]; then
+    echo "Error: \$HOME is not set." >&2
+    exit 1
+fi
+
 # Warn about critical READONLY_MOUNTS that are missing from config.
 # Without these, the sandbox starts but almost nothing works inside it.
 for _critical_mount in /usr /lib /bin /sbin /etc; do
@@ -187,7 +213,18 @@ for _critical_home in ".claude" ".claude.json"; do
     fi
 done
 
-# Warn when Landlock backend is selected but unsupported features are enabled.
+# Detect paths that appear in both HOME_READONLY and HOME_WRITABLE.
+# The writable mount wins (later bwrap arg overrides), which may
+# silently escalate permissions beyond what the user intended.
+for _ro in "${HOME_READONLY[@]}"; do
+    for _rw in "${HOME_WRITABLE[@]}"; do
+        if [[ "$_ro" == "$_rw" ]]; then
+            echo "WARNING: $HOME/$_ro is in both HOME_READONLY and HOME_WRITABLE (writable wins)." >&2
+        fi
+    done
+done
+
+# Warn when backend-specific features are used with an incompatible backend.
 if [[ "${SANDBOX_BACKEND:-auto}" == "landlock" ]]; then
     if _is_true "${FILTER_PASSWD:-true}"; then
         echo "WARNING: FILTER_PASSWD=true has no effect with the Landlock backend (no mount namespace)." >&2
@@ -196,6 +233,15 @@ if [[ "${SANDBOX_BACKEND:-auto}" == "landlock" ]]; then
     if [[ ${#BLOCKED_FILES[@]} -gt 0 ]]; then
         echo "WARNING: BLOCKED_FILES has no effect with the Landlock backend." >&2
         echo "  Individual file blocking requires bwrap or firejail." >&2
+    fi
+fi
+if [[ "${SANDBOX_BACKEND:-auto}" != "bwrap" && "${SANDBOX_BACKEND:-auto}" != "auto" ]]; then
+    if [[ -n "${DOTFILES_DIR:-}" && ${#HOME_SYMLINKS[@]} -gt 0 ]]; then
+        echo "WARNING: DOTFILES_DIR/HOME_SYMLINKS only work with the bwrap backend." >&2
+        echo "  Current backend: ${SANDBOX_BACKEND:-auto}. Symlinks will not be created." >&2
+    fi
+    if _is_true "${BIND_DEV_PTS:-false}"; then
+        echo "WARNING: BIND_DEV_PTS only applies to the bwrap backend." >&2
     fi
 fi
 
