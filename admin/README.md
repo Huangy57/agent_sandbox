@@ -129,6 +129,33 @@ at the `REAL_SBATCH`/`REAL_SRUN` paths configured in `sandbox-wrapper.conf`.
 
 ## How it works
 
+### Why a token? Why not just check the process flag?
+
+All sandbox backends set the kernel's `PR_SET_NO_NEW_PRIVS` flag, which is
+irreversible and inherited by all descendants. This flag is the ground truth
+for "is this process sandboxed?" — but it's a **process-local kernel
+property**, not something Slurm can see.
+
+The job submit plugin runs server-side in `slurmctld`, which is a separate
+process (often on a different machine). The sbatch client sends job
+parameters over an RPC — script, environment variables, resource requests —
+but **process-level kernel flags like `no_new_privs` are not part of the
+Slurm protocol.** The plugin only sees `job_desc` fields and `submit_uid`;
+it has no access to the submitter's process state.
+
+Slurm does have a `cli_filter` plugin that runs client-side (and could check
+the flag), but the [Slurm documentation explicitly warns](https://slurm.schedmd.com/cli_filter_plugins.html)
+it "must not be relied upon for security purposes" since users can bypass it
+with an alternate `slurm.conf`.
+
+This means some form of client-side signal that survives the RPC boundary is
+unavoidable. The **token** is that signal — and the **eBPF LSM** makes it
+unforgeable: a sandboxed process cannot read the token file, so it cannot
+present it to the plugin. Without eBPF protection, the agent could simply
+read the token and call the real sbatch directly, bypassing the wrapper.
+
+### Three-layer enforcement
+
 The system enforces sandbox on agent-submitted jobs through three layers:
 
 1. **System-wide Slurm wrappers** — replace `/usr/bin/sbatch` and
@@ -150,6 +177,12 @@ The system enforces sandbox on agent-submitted jobs through three layers:
 3. **eBPF LSM** (`token_protect.bpf.c`) — prevents sandboxed processes from
    reading the token file. All sandbox backends set `PR_SET_NO_NEW_PRIVS`,
    so any process inside the sandbox gets `EACCES` when opening the token.
+
+Each layer is necessary: the **wrapper** bridges the client-side
+`no_new_privs` check to the server-side plugin via the token. The **plugin**
+provides server-side enforcement that cannot be bypassed by skipping the
+wrapper. The **eBPF** ensures the token is unreadable to sandboxed processes,
+so it cannot be forged.
 
 **The result:** users run `sbatch` and `srun` as usual with no workflow
 change. The wrappers read the token (eBPF allows it) and either inject it
