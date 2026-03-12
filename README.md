@@ -216,25 +216,31 @@ The sandbox overlays `~/.claude/settings.json` to auto-allow tools (`Bash`, `Rea
 
 ## How It Works
 
-### Isolation Strategy
+### Isolation by Resource
 
-Each backend achieves the same result — the agent can only see and write what you explicitly allow — through different mechanisms:
+| Resource | bwrap | firejail | landlock |
+|---|---|---|---|
+| **Filesystem (read)** | Hidden (ENOENT) | Hidden (ENOENT) | Blocked (EACCES) |
+| **Filesystem (write)** | Project dir only | Project dir only | Project dir only |
+| **Environment variables** | Blocked | Blocked | Blocked |
+| **PID namespace** | Isolated | Isolated | Host PIDs visible |
+| **Network** | Not isolated | Not isolated | Not isolated |
+| **`/run` (system sockets)** | tmpfs + selective bind (munge, nscd, resolved) | Blacklist (dbus, systemd, containerd) | Full access |
+| **Abstract Unix sockets** | Accessible | Accessible | Accessible |
+| **IPC / `/dev/shm`** | Shared | Shared | Shared |
+| **Syscalls (seccomp)** | None by default | Built-in + io_uring blocked | kexec + io_uring + ptrace |
+| **User enumeration** | Filtered (`FILTER_PASSWD`) | Filtered (`FILTER_PASSWD`) | Not filtered |
+| **Slurm wrappers** | PATH shadow + binary relocation | PATH shadow only | PATH shadow only |
+| **Sandbox self-protection** | Read-only mount | Read-only mount | Not protected |
+| **tmux** | Outer blocked, nested works | Outer blocked, nested works | Outer blocked, nested works |
 
-- **bwrap**: Mount namespace. Blank tmpfs over `$HOME`, then selectively re-mount allowed paths read-only. Writable mounts for project dir and `~/.claude`. Slurm binaries relocated to internal path. Paths hidden entirely (ENOENT).
-- **firejail**: Setuid sandbox with mount namespace, PID namespace, seccomp, and capability dropping. Whitelist model for `$HOME`. Paths hidden entirely (ENOENT).
-- **landlock**: Kernel LSM filesystem ACLs. No mount namespace — blocked paths return EACCES. Custom seccomp filter blocks kexec + io_uring + ptrace.
+**Network** is not isolated on any backend — Slurm requires network access for munge authentication.
+
+**Abstract Unix sockets** (`@/org/...`) bypass filesystem isolation because they live in the network namespace, not on the filesystem. Isolating them would require a separate network namespace, which would break Slurm's munge authentication.
+
+**IPC / `/dev/shm`** is shared because MPI, NCCL, and CUDA use it for inter-process communication and GPU coordination. Isolating it (`--unshare-ipc` / `--ipc-namespace`) would break multi-process HPC workloads. Can be enabled in `sandbox.conf` if not needed.
 
 **Environment variables:** The sandbox inherits your shell environment and blocks `BLOCKED_ENV_VARS` (API tokens, secrets). To grant access, remove the variable from the blocklist.
-
-### What's NOT Isolated
-
-| Resource | Backend behavior |
-|---|---|
-| **Network** | Not isolated — Slurm needs network for munge authentication |
-| **PID namespace** | Isolated by bwrap/firejail. Not by Landlock. |
-| **`/run`** | bwrap: only `/run/munge`. Firejail: blacklists dbus/systemd/containerd. Landlock: all of `/run`. |
-| **User enumeration** | bwrap/firejail: filtered (`FILTER_PASSWD=true`). Landlock: not filtered. |
-| **tmux** | Outer tmux blocked (escape risk). Nested tmux available with `Ctrl-a` prefix. |
 
 ---
 
@@ -348,17 +354,20 @@ Auto-detection priority: bwrap → firejail → landlock. All three provide kern
 
 ### Known Limitations
 
+Sorted by perceived severity (security impact first, then operational issues).
+
 | Backend | Limitation | Mitigation |
 |---|---|---|
-| **bwrap/Firejail** | `/tmp` isolated by default (`PRIVATE_TMP=true`) — breaks MPI shared-memory transport and NCCL inter-GPU sockets | Set `PRIVATE_TMP=false` in `sandbox.conf` for HPC multi-process workloads |
-| **bwrap** | Host `/dev` exposure when `BIND_DEV_PTS=true` — required for tmux on kernels < 5.4 (bwrap's devpts gets `ptmxmode=000`). Exposes host `/dev/pts`; on kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals outside the sandbox | Default `false` (safe). Set `BIND_DEV_PTS=true` in `sandbox.conf` only if you need tmux inside the sandbox. Upgrade to kernel >= 5.4 to avoid the need, or >= 6.2 to disable TIOCSTI entirely |
-| **bwrap** | No seccomp filter by default — bwrap supports `--seccomp` but does not enable it out of the box. Without seccomp, dangerous syscalls like `ptrace`, `process_vm_writev`, `kexec_load`, and `io_uring_setup` remain available. Adding a seccomp policy is harder than with firejail (requires a BPF binary, not a simple drop list) | Use firejail or Landlock for syscall filtering. PID namespace (`--unshare-pid`) mitigates `ptrace`/`process_vm_*` attacks. See [Admin Hardening](ADMIN_HARDENING.md) for io_uring/kexec |
-| **All** | `memfd_create`, `userfaultfd`, `process_vm_readv/writev` not blocked by any backend (HPC compatibility). Docker's default seccomp profile makes the same trade-offs: allows `memfd_create` and `process_vm_readv`, blocks `io_uring` (since 25.0), and has always blocked `userfaultfd`. | Accepted trade-off. `memfd_create` needed by CUDA, PyTorch, JAX. `process_vm_readv/writev` needed by MPI (mitigated by PID namespace in bwrap/firejail). `userfaultfd` could likely be blocked (Java ZGC no longer needs it) but kept for QEMU/CRIU. See [Admin Hardening](ADMIN_HARDENING.md). |
-| **Landlock** | Cannot block `AF_UNIX connect()` — agent can reach D-Bus, systemd sockets | Use bwrap or firejail; or see [Admin Hardening](ADMIN_HARDENING.md) |
+| **All** | Network not isolated — agent can exfiltrate data via HTTP, or SSH to an unsandboxed shell if `~/.ssh` is exposed | Do not expose `~/.ssh`; if you must, limit keys to single-service scopes (e.g. GitHub deploy keys only). Consider network policy at admin level |
+| **Firejail** | Setuid-root binary with a significant [CVE history](https://www.cvedetails.com/vulnerability-list/vendor_id-16191/Firejail.html) (18 CVEs, 12 local root exploits). Installing firejail adds a privileged attack surface to every node | Prefer bwrap where possible. See [Apptainer Comparison](APPTAINER_COMPARISON.md#security-track-record) for the full CVE breakdown |
+| **Landlock** | Cannot block `AF_UNIX connect()` — agent can reach D-Bus, systemd sockets for potential sandbox escape | Use bwrap or firejail; or see [Admin Hardening](ADMIN_HARDENING.md) |
+| **Landlock** | No sandbox self-protection — agent can modify wrapper scripts. Current session is safe (kernel rules are irrevocable), but future sessions could be compromised | Use bwrap or firejail |
 | **Landlock** | No PID namespace — host processes visible via `/proc`. Agent could read `/proc/PID/environ` of same-UID processes (e.g. sbatch wrapper injecting bypass token) | Use bwrap or firejail for PID isolation; token exposure window is microseconds. A SPANK plugin would eliminate it entirely |
-| **Landlock** | No sandbox self-protection — agent can modify wrapper scripts | Current session is safe (kernel rules are irrevocable), but future sessions could be affected |
+| **bwrap** | No seccomp filter — `io_uring` syscalls remain available (other dangerous syscalls already mitigated by `no_new_privs` and PID namespace) | Add an `io_uring` seccomp filter — most tools fall back gracefully (Docker 25.0+ does the same). See [Admin Hardening](ADMIN_HARDENING.md#seccomp-for-bwrap) for impact details |
+| **All** | `memfd_create`, `userfaultfd`, `process_vm_readv/writev` not blocked by any backend (HPC compatibility). Docker's default seccomp profile makes the same trade-offs: allows `memfd_create` and `process_vm_readv`, blocks `io_uring` (since 25.0), and has always blocked `userfaultfd` | Accepted trade-off. `memfd_create` needed by CUDA, PyTorch, JAX. `process_vm_readv/writev` needed by MPI (mitigated by PID namespace in bwrap/firejail). `userfaultfd` kept for QEMU/CRIU. See [Admin Hardening](ADMIN_HARDENING.md) |
+| **bwrap** (`BIND_DEV_PTS=true`) | Host `/dev` exposure — required for tmux on kernels < 5.4. On kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals outside the sandbox | Default `false` (safe). Upgrade to kernel ≥ 5.4 to avoid the need, or ≥ 6.2 to disable TIOCSTI entirely |
+| **Landlock** | Host `/dev/pts/*` always visible (no mount namespace). On kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals — unlike bwrap, this is not opt-in | Kernel ≥ 6.2 disables TIOCSTI system-wide. Use bwrap or firejail for private `/dev` |
 | **All** | `/dev/shm` is writable and shared (IPC namespace not isolated by default) — could be used for covert cross-sandbox communication | `firejail --ipc-namespace`, `bwrap --unshare-ipc` |
-| **Firejail** | Setuid-root binary with a significant [CVE history](https://www.cvedetails.com/vulnerability-list/vendor_id-16191/Firejail.html) (18 CVEs, 12 local root exploits). Installing firejail adds a privileged attack surface to every node. | Prefer bwrap where possible. See [Apptainer Comparison](APPTAINER_COMPARISON.md#security-track-record) for the full CVE breakdown. |
-| **Firejail** | `FILTER_PASSWD=true` blocks NSS daemon sockets (nscd, nslcd, sssd) to prevent user enumeration. On LDAP/AD clusters where the current user is not in local `/etc/passwd`, this breaks user/group resolution, which can cause Slurm failures and shell issues. bwrap avoids this by overlaying a pre-generated `/etc/passwd` that includes the current user. | Set `FILTER_PASSWD=false` in `sandbox.conf` on LDAP clusters when using the firejail backend, or prefer bwrap which handles this correctly. |
 | **Landlock** | User enumeration via LDAP/AD — `getent passwd` reveals all directory users | No mount namespace to overlay files or block sockets; set `FILTER_PASSWD=false` if LDAP lookups are needed |
-| **All** | Network not isolated — agent can make HTTP requests, SSH connections | Do not expose `~/.ssh`; consider network policy at admin level |
+| **bwrap/Firejail** | `/tmp` isolated by default (`PRIVATE_TMP=true`) — breaks MPI shared-memory transport and NCCL inter-GPU sockets | Set `PRIVATE_TMP=false` in `sandbox.conf` for HPC multi-process workloads |
+| **Firejail** | `FILTER_PASSWD=true` blocks NSS daemon sockets (nscd, nslcd, sssd) on LDAP/AD clusters where the current user is not in local `/etc/passwd`, breaking user/group resolution and Slurm | Set `FILTER_PASSWD=false` in `sandbox.conf` on LDAP clusters, or prefer bwrap which overlays a pre-generated `/etc/passwd` |

@@ -109,13 +109,13 @@ The Landlock backend also installs a **seccomp filter** that blocks dangerous sy
 
 The Landlock seccomp filter blocks `io_uring` and `kexec_load/kexec_file_load`. The `io_uring` block is the main security value. It has a [large kernel attack surface](https://security.googleblog.com/2023/06/learnings-from-kctf-vrps-42-linux.html) and is not needed by Claude Code itself. [Docker's default seccomp profile](https://github.com/moby/moby/pull/46762) also blocks `io_uring` since version 25.0, citing Google's research. However, `io_uring` is used by tools that an agent might invoke on behalf of the user:
 
-| Tool | Uses `io_uring` | Reference |
-|---|---|---|
-| [Node.js](https://nodejs.org/) / libuv | Yes — all async file I/O on modern Linux | [libuv PR #3952](https://github.com/libuv/libuv/pull/3952) |
-| [RocksDB](https://rocksdb.org/) | Yes — parallel SST reads via `MultiGet()` | [io_posix.cc](https://github.com/facebook/rocksdb/blob/main/env/io_posix.cc) |
-| Rust [tokio-uring](https://github.com/tokio-rs/tokio-uring) | Yes — io_uring-backed async runtime | [io-uring crate](https://github.com/tokio-rs/io-uring) |
-| [QEMU](https://www.qemu.org/) | Yes — block I/O backend | [block/io_uring.c](https://github.com/QEMU/qemu/blob/master/block/io_uring.c) |
-| DuckDB, SQLite | No | — |
+| Tool | Uses `io_uring` | When blocked | Impact |
+|---|---|---|---|
+| [Node.js](https://nodejs.org/) / libuv | Yes — async file I/O ([libuv PR #3952](https://github.com/libuv/libuv/pull/3952)) | Falls back to epoll + threadpool | None — transparent fallback |
+| [RocksDB](https://rocksdb.org/) | Yes — parallel SST reads ([io_posix.cc](https://github.com/facebook/rocksdb/blob/main/env/io_posix.cc)) | Falls back to synchronous `pread` | Minor — slightly slower bulk reads |
+| [QEMU](https://www.qemu.org/) | Yes — block I/O backend ([block/io_uring.c](https://github.com/QEMU/qemu/blob/master/block/io_uring.c)) | Falls back to `aio=threads` | Minor — slightly slower disk I/O |
+| Rust [tokio-uring](https://github.com/tokio-rs/tokio-uring) | Yes — io_uring-only runtime ([io-uring crate](https://github.com/tokio-rs/io-uring)) | **No fallback — fails** | **Breaking** — but standard tokio (epoll) is unaffected |
+| DuckDB, SQLite | No | — | None |
 
 Several other syscalls were **intentionally kept unblocked** to avoid breaking legitimate HPC and data science workloads:
 
@@ -133,7 +133,7 @@ On Ubuntu 24.04+, AppArmor blocks unprivileged user namespaces, so bwrap doesn't
 
 | Option | Effort | Result |
 |---|---|---|
-| **Do nothing** | None | Sandbox falls back to Landlock (weakest — see gaps below) |
+| **Do nothing** | None | Sandbox falls back to Landlock (weakest — see [Known Limitations](README.md#known-limitations)) |
 | **Enable bwrap via AppArmor** | Low | Strongest backend — mount namespace, PID namespace, `/tmp` isolation, self-protection |
 | **Install firejail** | Low | Strong — setuid binary bypasses AppArmor; mount namespace, PID namespace, seccomp |
 
@@ -150,8 +150,8 @@ On Ubuntu 24.04+, AppArmor blocks unprivileged user namespaces, so bwrap doesn't
 | Sandbox self-protection | ✓ (scripts read-only via bind mount) | ✓ (scripts hidden via mount namespace) |
 | User enumeration filtering | ✓ (overlays `/etc/passwd` + `nsswitch.conf`, LDAP-safe) | Partial (blacklists NSS sockets, but breaks LDAP-only users) |
 | Slurm binary relocation | ✓ (overlays `/usr/bin/sbatch` with redirector) | PATH-based only (no overlay) |
-| Seccomp | Supported but not recommended (see below) | Built-in (`--seccomp` + `--caps.drop=all`) |
-| io_uring blocking | Not blocked (used by Node.js, RocksDB, Rust) | Not blocked in firejail v0.9.72 on aarch64 |
+| Seccomp | Supported ([see below](#seccomp-for-bwrap)) | Built-in (`--seccomp` + `--caps.drop=all`) |
+| io_uring blocking | Not blocked (most tools fall back gracefully; see [trade-offs](#seccomp-filter--hpc-compatibility-trade-offs)) | Not blocked in firejail v0.9.72 on aarch64 |
 | Internal state exposure | None | `/run/firejail/mnt/seccomp/` readable (reveals BPF filter) |
 | Attack surface | Minimal, no setuid | Setuid root binary on every node |
 | CVE history | [4 CVEs](https://www.opencve.io/cve?search=bubblewrap), 0 root exploits, none since 2020 | [18 CVEs](https://www.cvedetails.com/vulnerability-list/vendor_id-16191/Firejail.html), 12 local root exploits ([details](APPTAINER_COMPARISON.md#firejail-18-cves-12-are-local-root)) |
@@ -188,7 +188,7 @@ The sandbox auto-detects bwrap from `$PATH`, or admins can set `BWRAP=/path/to/b
 
 **Hardening note:** The AppArmor profile grants `userns` permission only to the binary at the exact path specified. If the admin installs bwrap to a controlled location and uses that path in the profile, users cannot gain user namespace access by compiling or installing their own copy elsewhere. This is stronger than per-user Homebrew installs, where each user controls the binary.
 
-#### Seccomp: not recommended for bwrap
+#### Seccomp for bwrap
 
 bwrap supports `--seccomp FD` to load a BPF syscall filter. The Landlock backend uses a seccomp filter as **defense-in-depth** because it lacks mount namespace isolation — seccomp compensates for weaker primary isolation. bwrap does not have this problem: mount namespace + PID namespace + `no_new_privs` already provide strong containment.
 
@@ -199,7 +199,9 @@ After accounting for HPC compatibility (keeping `memfd_create` for GPU/JIT, `pro
 | `kexec_load` / `kexec_file_load` | Yes | `no_new_privs` (requires `CAP_SYS_BOOT`) |
 | `io_uring_setup` / `io_uring_enter` | Yes | Nothing — real attack surface reduction |
 
-So the practical gain is blocking `io_uring` only. However, `io_uring` is used by legitimate tools an agent may invoke — [Node.js/libuv](https://github.com/libuv/libuv/pull/3952) for all async file I/O, [RocksDB](https://github.com/facebook/rocksdb/blob/main/env/io_posix.cc) for parallel reads, and Rust [tokio-uring](https://github.com/tokio-rs/tokio-uring) runtimes. An agent running data processing pipelines or user-requested tools could break silently. The risk-benefit trade-off does not favor enabling seccomp on bwrap for general HPC use. See the [seccomp trade-offs](#seccomp-filter--hpc-compatibility-trade-offs) section for the full analysis.
+So the practical gain is blocking `io_uring` only. Docker 25.0+ [blocks `io_uring` by default](https://docs.docker.com/engine/security/seccomp/) in its seccomp profile, and the ecosystem has adapted — [Node.js/libuv](https://github.com/libuv/libuv/pull/3952) falls back to epoll, [RocksDB](https://github.com/facebook/rocksdb/blob/main/env/io_posix.cc) falls back to synchronous `pread`, and most tools degrade gracefully when `io_uring` returns `EPERM`. The one caveat is Rust's [tokio-uring](https://github.com/tokio-rs/tokio-uring) runtime, which is io_uring-only and would fail (standard tokio uses epoll and is unaffected).
+
+Given Docker's precedent, adding an `io_uring` seccomp filter to bwrap is reasonable and unlikely to cause issues for most workloads. See the [seccomp trade-offs](#seccomp-filter--hpc-compatibility-trade-offs) section for the full analysis.
 
 ### Firejail backend (alternative to bwrap)
 
