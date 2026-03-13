@@ -122,13 +122,15 @@ SLURM_EOF
 
     for blocked in "${BLOCKED_FILES[@]}"; do
         if [[ -e "$blocked" ]]; then
-            BWRAP_ARGS+=(--ro-bind /dev/null "$blocked")
+            # Resolve symlinks — bwrap can't bind-mount over a symlink.
+            # Blocking the resolved target also blocks access via the symlink.
+            BWRAP_ARGS+=(--ro-bind /dev/null "$(readlink -f "$blocked")")
         fi
     done
 
     # Hide the sandbox bypass token if configured (see ADMIN_HARDENING.md §1)
     if [[ -n "${SANDBOX_BYPASS_TOKEN:-}" && -e "$SANDBOX_BYPASS_TOKEN" ]]; then
-        BWRAP_ARGS+=(--ro-bind /dev/null "$SANDBOX_BYPASS_TOKEN")
+        BWRAP_ARGS+=(--ro-bind /dev/null "$(readlink -f "$SANDBOX_BYPASS_TOKEN")")
     fi
 
     for blocked in "${EXTRA_BLOCKED_PATHS[@]}"; do
