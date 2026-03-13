@@ -30,8 +30,8 @@ local function read_conf(path)
 end
 
 -- Admin config path. Change during deployment if using a different location.
-local ADMIN_CONF = "/opt/claude-sandbox/sandbox.conf"
-local ADMIN_DIR = ADMIN_CONF:match("(.*)/") or "/opt/claude-sandbox"
+local ADMIN_CONF = "/app/lib/agent-sandbox/sandbox.conf"
+local ADMIN_DIR = ADMIN_CONF:match("(.*)/") or "/app/lib/agent-sandbox"
 
 -- Read config from admin sandbox config
 local conf = read_conf(ADMIN_CONF)

@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Admin config path. Change during deployment if using a different location.
 # Not read from environment (an agent could redirect it to a controlled dir).
-_ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+_ADMIN_CONF="/app/lib/agent-sandbox/sandbox.conf"
 _ADMIN_DIR="${_ADMIN_CONF%/*}"
 
 # Clear env vars an agent could pre-set to influence config defaults

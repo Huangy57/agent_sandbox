@@ -30,7 +30,7 @@ if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
 else
     # If admin wrappers are deployed, source the admin config to get
     # the real binary path and skip the admin wrapper indirection.
-    _ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+    _ADMIN_CONF="/app/lib/agent-sandbox/sandbox.conf"
     if [[ -z "${REAL_SBATCH:-}" && -f "$_ADMIN_CONF" ]]; then
         source "$_ADMIN_CONF"
     fi

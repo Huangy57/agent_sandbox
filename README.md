@@ -138,7 +138,7 @@ cd /path/to/my-project
 ~/.claude/sandbox/sandbox-exec.sh -- claude
 
 # Or add an alias to .bashrc:
-# alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'
+# alias agent-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'
 ```
 
 Claude starts in your project directory with full read access to the HPC but write access **only** to that directory. SSH keys, API tokens, and credentials are invisible.

@@ -34,18 +34,18 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 | User outside sandbox | Reads token → passes to sbatch → **unsandboxed** |
 | `curl` to `slurmrestd` | Works if exposed (see §4 for network isolation) |
 
-Design, setup instructions, components, and verification steps are in [`slurm-enforce/README.md`](slurm-enforce/README.md). If also deploying Section 2, the Slurm enforcement variables can go directly in `/opt/claude-sandbox/sandbox.conf` — one config file for both systems.
+Design, setup instructions, components, and verification steps are in [`slurm-enforce/README.md`](slurm-enforce/README.md). If also deploying Section 2, the Slurm enforcement variables can go directly in `/app/lib/agent-sandbox/sandbox.conf` — one config file for both systems.
 
 ---
 
 ## 2. Admin-Owned Sandbox Installation
 
-**What it solves:** Two problems at once — **sandbox self-protection** (agent can't modify scripts, even across sessions) and **policy enforcement** (admin sets a security baseline that users cannot weaken). Users can customize within bounds via a separate `user.conf` — adding data mounts and extra blocked paths — but cannot remove admin-enforced protections like blocked credentials or hidden paths.
+**What it solves:** Two problems at once — **policy enforcement** (admin sets a security baseline that users cannot weaken) and **sandbox self-protection** (with bwrap/firejail, scripts are read-only inside the sandbox; with admin-owned scripts at `/app/lib/agent-sandbox/`, the agent can't modify them even without a mount namespace). Users can customize within bounds via a separate `user.conf` — adding data mounts and extra blocked paths — but cannot remove admin-enforced protections like blocked credentials or hidden paths.
 
 **Effort:** Low-medium. **Category:** Admin-enforced.
 
 Key features:
-- **Multi-level config** — admin `sandbox.conf` (hardcoded at `/opt/claude-sandbox/`) sets the baseline; user config (`user.conf`) and per-project configs (`conf.d/*.conf`) can only add to it. The path is hardcoded (not an env var) to prevent agent redirection. Post-merge validation refuses to start if a user config removes admin-enforced entries.
+- **Multi-level config** — admin `sandbox.conf` (set via `_ADMIN_DIR` in `sandbox-lib.sh`, defaults to `/app/lib/agent-sandbox/`) sets the baseline; user config (`user.conf`) and per-project configs (`conf.d/*.conf`) can only add to it. The path is a script variable (not an env var) to prevent agent redirection. Admin values are forcefully re-applied after user config — even if user config runs arbitrary code.
 - **Backend selection** — on Ubuntu 24.04+, AppArmor blocks unprivileged user namespaces. An admin AppArmor profile (low effort) enables the recommended bwrap backend. Firejail (setuid) is an alternative. Without either, the sandbox falls back to Landlock with [significant gaps](ADMIN_INSTALL.md#landlock-fallback).
 - **Seccomp trade-offs** — the Landlock and firejail backends block `io_uring` and `userfaultfd` via seccomp. A bwrap seccomp filter is supported but not yet included. See [HPC compatibility analysis](ADMIN_INSTALL.md#seccomp-filter--hpc-compatibility).
 

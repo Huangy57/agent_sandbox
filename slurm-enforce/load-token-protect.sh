@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Admin config path. Change during deployment if using a different location.
-_ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+_ADMIN_CONF="/app/lib/agent-sandbox/sandbox.conf"
 _ADMIN_DIR="${_ADMIN_CONF%/*}"
 
 # Source config (check: next to script → admin sandbox config)

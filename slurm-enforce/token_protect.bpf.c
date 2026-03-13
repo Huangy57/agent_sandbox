@@ -18,8 +18,8 @@
 // Set the protected file identity (device + inode).
 // IMPORTANT: the kernel s_dev uses new_encode_dev() format, not the old
 // encoding from stat(2). Convert via: (major << 20) | minor.
-//   TOKEN_INO=$(stat -c %i /opt/claude-sandbox/.sandbox-bypass-token)
-//   TOKEN_DEV=$(python3 -c "import os; st = os.stat('/opt/claude-sandbox/.sandbox-bypass-token'); print((os.major(st.st_dev) << 20) | os.minor(st.st_dev))")
+//   TOKEN_INO=$(stat -c %i /app/lib/agent-sandbox/.sandbox-bypass-token)
+//   TOKEN_DEV=$(python3 -c "import os; st = os.stat('/app/lib/agent-sandbox/.sandbox-bypass-token'); print((os.major(st.st_dev) << 20) | os.minor(st.st_dev))")
 //   MAP_ID=$(bpftool map show | grep protected_file | head -1 | awk '{print $1}' | tr -d ':')
 //   DEV_BYTES=$(python3 -c "import struct; print(' '.join(f'0x{x:02x}' for x in struct.pack('<Q', $TOKEN_DEV)))")
 //   INO_BYTES=$(python3 -c "import struct; print(' '.join(f'0x{x:02x}' for x in struct.pack('<Q', $TOKEN_INO)))")

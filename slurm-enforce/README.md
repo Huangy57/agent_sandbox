@@ -20,7 +20,7 @@ End-to-end tested on Ubuntu 24.04 (kernel 6.8, Slurm 23.11, Landlock backend) wi
 
 ## Configuration
 
-Each script has an `_ADMIN_CONF` variable at the top (defaults to `/opt/claude-sandbox/sandbox.conf`). This is **not** read from environment variables — an agent could redirect it to a controlled directory. Change the variable during deployment if using a different location.
+Each script has an `_ADMIN_CONF` variable at the top (defaults to `/app/lib/agent-sandbox/sandbox.conf`). This is **not** read from environment variables — an agent could redirect it to a controlled directory. Change the variable during deployment if using a different location.
 
 Config search order (same across all components):
 
@@ -54,12 +54,12 @@ The key variables (used by all components):
 The token must be on a **shared filesystem** accessible from both submit
 nodes (where the wrappers run) and the controller (where `job_submit.lua`
 runs). On clusters where `/etc/slurm/` is node-local, use a shared path
-instead — e.g. alongside the sandbox install under `/opt/claude-sandbox/`.
+instead — e.g. alongside the sandbox install under `/app/lib/agent-sandbox/`.
 
 ```bash
 # Generate the token
-sudo head -c 32 /dev/urandom | base64 > /opt/claude-sandbox/.sandbox-bypass-token
-sudo chmod 0644 /opt/claude-sandbox/.sandbox-bypass-token
+sudo head -c 32 /dev/urandom | base64 > /app/lib/agent-sandbox/.sandbox-bypass-token
+sudo chmod 0644 /app/lib/agent-sandbox/.sandbox-bypass-token
 ```
 
 Set `TOKEN_FILE` (or `SANDBOX_BYPASS_TOKEN`) in your config to the chosen path.
@@ -191,7 +191,7 @@ valid" from "wrapping job".
 
 ```bash
 # 1. eBPF: normal process can read the token
-cat /opt/claude-sandbox/.sandbox-bypass-token
+cat /app/lib/agent-sandbox/.sandbox-bypass-token
 # → prints the token
 
 # 2. eBPF: process with no_new_privs cannot (simulates any sandbox backend)
@@ -199,7 +199,7 @@ python3 -c "
 import ctypes, sys
 ctypes.CDLL(None).prctl(38, 1, 0, 0, 0)
 try:
-    open('/opt/claude-sandbox/.sandbox-bypass-token').read()
+    open('/app/lib/agent-sandbox/.sandbox-bypass-token').read()
     print('FAIL: token was readable', file=sys.stderr); sys.exit(1)
 except PermissionError:
     print('OK: eBPF blocked read (EACCES)')

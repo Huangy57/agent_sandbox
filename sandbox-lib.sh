@@ -22,7 +22,26 @@ if [[ "${BASH_VERSINFO[0]}" -lt 4 ]] || { [[ "${BASH_VERSINFO[0]}" -eq 4 && "${B
 fi
 
 SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SANDBOX_CONF="${SANDBOX_CONF:-$SANDBOX_DIR/sandbox.conf}"
+
+# User data directory — user-owned config, Claude-specific files, temp data.
+# Separate from SANDBOX_DIR (script location) so that an admin-owned install
+# at e.g. /app/lib/agent-sandbox/ can coexist with per-user customization.
+# Claude-specific: this path and the files it contains (sandbox-claude.md,
+# sandbox-settings.json) are the only Claude-specific aspects of the sandbox.
+_USER_DATA_DIR="${HOME}/.claude/sandbox"
+mkdir -p "$_USER_DATA_DIR"
+
+# Bootstrap: if running from an admin install, seed user data files that
+# don't exist yet (Claude-specific agent instructions and settings).
+# These are templates — the user can edit their copy without affecting
+# the admin install.
+for _seed_file in sandbox-claude.md sandbox-settings.json; do
+    if [[ -f "$SANDBOX_DIR/$_seed_file" && ! -f "$_USER_DATA_DIR/$_seed_file" ]]; then
+        cp "$SANDBOX_DIR/$_seed_file" "$_USER_DATA_DIR/$_seed_file"
+    fi
+done
+
+SANDBOX_CONF="${SANDBOX_CONF:-$_USER_DATA_DIR/sandbox.conf}"
 
 # ── Defaults (overridden by sandbox.conf) ───────────────────────
 
@@ -120,19 +139,19 @@ _is_true() {
 #
 # Config hierarchy (each layer adds to the previous):
 #   1. Defaults (above)
-#   2. Admin config (/opt/claude-sandbox/sandbox.conf) — security baseline
-#   3. User config ($SANDBOX_DIR/user.conf) — additive customization
-#   4. Per-project overrides ($SANDBOX_DIR/conf.d/*.conf)
+#   2. Admin config (/app/lib/agent-sandbox/sandbox.conf) — security baseline
+#   3. User config ($_USER_DATA_DIR/user.conf) — additive customization
+#   4. Per-project overrides ($_USER_DATA_DIR/conf.d/*.conf)
 #
 # When an admin config exists at the hardcoded path, it is loaded first
-# as a security baseline. The user's config ($SANDBOX_DIR/user.conf)
+# as a security baseline. The user's config ($_USER_DATA_DIR/user.conf)
 # can add entries to security-critical arrays (BLOCKED_FILES,
 # BLOCKED_ENV_VARS, EXTRA_BLOCKED_PATHS) but not remove admin-set
 # ones. Items in the admin's HOME_READONLY cannot be moved to
 # HOME_WRITABLE. The admin path is hardcoded (not an env var) to
 # prevent an agent from redirecting it to a controlled directory.
 #
-# Without an admin config, $SANDBOX_DIR/sandbox.conf is the only config.
+# Without an admin config, $_USER_DATA_DIR/sandbox.conf is the only config.
 # See ADMIN_INSTALL.md for setup instructions.
 
 # Preserve any SANDBOX_BACKEND set via environment or --backend flag
@@ -145,18 +164,18 @@ _SANDBOX_BACKEND_OVERRIDE="${SANDBOX_BACKEND:-}"
 # Change this line if the admin sandbox is installed elsewhere.
 _ADMIN_CONF=""
 _USER_CONF=""
-_ADMIN_DIR="/opt/claude-sandbox"
+_ADMIN_DIR="/app/lib/agent-sandbox"
 
-if [[ "${SANDBOX_CONF:-}" != "" && "$SANDBOX_CONF" != "$SANDBOX_DIR/sandbox.conf" ]]; then
+if [[ "${SANDBOX_CONF:-}" != "" && "$SANDBOX_CONF" != "$_USER_DATA_DIR/sandbox.conf" ]]; then
     # Explicit SANDBOX_CONF override — single config, backward compat
     _USER_CONF="$SANDBOX_CONF"
 elif [[ -f "$_ADMIN_DIR/sandbox.conf" ]]; then
     # Admin-installed: admin config is authoritative, user gets user.conf
     _ADMIN_CONF="$_ADMIN_DIR/sandbox.conf"
-    _USER_CONF="$SANDBOX_DIR/user.conf"
+    _USER_CONF="$_USER_DATA_DIR/user.conf"
 else
     # User-only install: single config
-    _USER_CONF="$SANDBOX_DIR/sandbox.conf"
+    _USER_CONF="$_USER_DATA_DIR/sandbox.conf"
 fi
 
 # --- Helper: source a config file with syntax check ---
@@ -427,7 +446,7 @@ _enforce_admin_config() {
 load_project_config() {
     local _PROJECT_DIR="$1"
     export _PROJECT_DIR
-    local _conf_d="$SANDBOX_DIR/conf.d"
+    local _conf_d="$_USER_DATA_DIR/conf.d"
     if [[ -d "$_conf_d" ]]; then
         local _f
         for _f in "$_conf_d"/*.conf; do
@@ -559,7 +578,7 @@ validate_project_dir() {
 generate_filtered_passwd() {
     _is_true "${FILTER_PASSWD:-true}" || return 0
 
-    local tmpdir="$SANDBOX_DIR/.passwd-filter"
+    local tmpdir="$_USER_DATA_DIR/.passwd-filter"
     mkdir -p "$tmpdir"
 
     local my_uid
@@ -635,7 +654,7 @@ prepare_config_dir() {
     mkdir -p "$config_dir"
 
     # --- Merge CLAUDE.md ---
-    local sandbox_snippet="$SANDBOX_DIR/sandbox-claude.md"
+    local sandbox_snippet="$_USER_DATA_DIR/sandbox-claude.md"
     local user_claude_md="$real_claude_dir/CLAUDE.md"
     {
         if [[ -f "$user_claude_md" ]]; then
@@ -648,7 +667,7 @@ prepare_config_dir() {
     } > "$config_dir/CLAUDE.md"
 
     # --- Merge settings.json ---
-    local sandbox_settings="$SANDBOX_DIR/sandbox-settings.json"
+    local sandbox_settings="$_USER_DATA_DIR/sandbox-settings.json"
     local user_settings="$real_claude_dir/settings.json"
 
     if [[ -f "$sandbox_settings" ]]; then

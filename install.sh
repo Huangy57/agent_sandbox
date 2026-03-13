@@ -180,11 +180,11 @@ fi
 
 # ── Step 6: Suggest shell alias ───────────────────────────────────
 
-ALIAS_LINE="alias claude-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'"
+ALIAS_LINE="alias agent-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'"
 ALIAS_ALREADY=false
 
 for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.dotfiles/.bashrc" "$HOME/.dotfiles/.zshrc"; do
-    if [[ -f "$rc" ]] && grep -qF "claude-sandbox" "$rc" 2>/dev/null; then
+    if [[ -f "$rc" ]] && grep -qF "agent-sandbox" "$rc" 2>/dev/null; then
         ALIAS_ALREADY=true
         break
     fi
@@ -209,6 +209,6 @@ if [[ "$ALIAS_ALREADY" == false ]]; then
     echo ""
     echo "    $ALIAS_LINE"
     echo ""
-    echo "  Then you can just run:  claude-sandbox"
+    echo "  Then you can just run:  agent-sandbox"
 fi
 echo "════════════════════════════════════════════════"
