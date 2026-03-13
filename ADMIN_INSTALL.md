@@ -68,7 +68,8 @@ Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.clau
 | Setting | User can add entries | User can remove admin entries |
 |---|---|---|
 | `READONLY_MOUNTS` | Yes — mount more data read-only | N/A (additive) |
-| `EXTRA_WRITABLE_PATHS` | Yes — add writable directories | N/A (additive) |
+| `EXTRA_WRITABLE_PATHS` | Yes — add writable directories (subject to `DENIED_WRITABLE_PATHS`) | N/A (additive) |
+| `DENIED_WRITABLE_PATHS` | No | **No — admin-only deny-list** |
 | `HOME_READONLY` | Yes — expose more dotfiles | N/A (additive) |
 | `HOME_WRITABLE` | Yes (but not items in admin's `HOME_READONLY`) | N/A (additive) |
 | `BLOCKED_FILES` | Yes — block more files | **No — restored with warning** |
@@ -96,6 +97,12 @@ WARNING: User config removed admin-enforced BLOCKED_ENV_VARS entry 'GITHUB_TOKEN
 
 ```
 WARNING: User config moved admin HOME_READONLY entry '.gnupg' to HOME_WRITABLE — reverted.
+```
+
+**DENIED_WRITABLE_PATHS**: any `EXTRA_WRITABLE_PATHS` entry matching or under a denied path is stripped with a warning:
+
+```
+WARNING: User config added EXTRA_WRITABLE_PATHS entry '/etc/cron.d' under denied path '/etc' — removed.
 ```
 
 ## Example Admin Config
@@ -145,6 +152,15 @@ HOME_READONLY=(
 HOME_WRITABLE=(
     ".claude"
     ".claude.json"
+)
+
+# Paths that must NEVER be writable — user EXTRA_WRITABLE_PATHS entries
+# matching or under these are stripped with a warning.
+DENIED_WRITABLE_PATHS=(
+    "/etc"
+    "/app"
+    "$HOME/.ssh"
+    "$HOME/.gnupg"
 )
 
 PRIVATE_TMP=true

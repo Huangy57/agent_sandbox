@@ -23,6 +23,16 @@ fi
 
 SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Resolve HOME from the password database, not the environment variable.
+# An agent (or user config) could export HOME=/tmp/evil before the sandbox
+# starts, redirecting all home-relative paths.  getent passwd is authoritative.
+HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6)" || true
+if [[ -z "$HOME" ]]; then
+    # Fallback: the ~ expansion uses the passwd entry, not $HOME.
+    HOME="$(cd ~ && pwd)"
+fi
+export HOME
+
 # User data directory — user-owned config, Claude-specific files, temp data.
 # Separate from SANDBOX_DIR (script location) so that an admin-owned install
 # at e.g. /app/lib/agent-sandbox/ can coexist with per-user customization.
@@ -81,6 +91,11 @@ BLOCKED_FILES=()
 EXTRA_BLOCKED_PATHS=()
 
 EXTRA_WRITABLE_PATHS=()
+
+# Admin deny-list: paths that must NEVER be writable, regardless of
+# user config. EXTRA_WRITABLE_PATHS entries matching these (or under
+# them) are stripped with a warning. Admins set this in the admin sandbox.conf.
+DENIED_WRITABLE_PATHS=()
 
 # Path to the Slurm sandbox bypass token (see ADMIN_HARDENING.md §1).
 # When set, the bwrap backend automatically hides this file from the sandbox
@@ -215,6 +230,10 @@ _snapshot_admin_config() {
     _ADMIN_BLOCKED_ENV_VARS=("${BLOCKED_ENV_VARS[@]}")
     _ADMIN_EXTRA_BLOCKED_PATHS=("${EXTRA_BLOCKED_PATHS[@]}")
     _ADMIN_HOME_READONLY=("${HOME_READONLY[@]}")
+    _ADMIN_DENIED_WRITABLE_PATHS=("${DENIED_WRITABLE_PATHS[@]}")
+    _ADMIN_EXTRA_WRITABLE_PATHS=("${EXTRA_WRITABLE_PATHS[@]}")
+    _ADMIN_READONLY_MOUNTS=("${READONLY_MOUNTS[@]}")
+    _ADMIN_ALLOWED_PROJECT_PARENTS=("${ALLOWED_PROJECT_PARENTS[@]}")
     # Scalar values that user configs must not override
     _ADMIN_SANDBOX_BYPASS_TOKEN="${SANDBOX_BYPASS_TOKEN:-}"
     _ADMIN_TOKEN_FILE="${TOKEN_FILE:-}"
@@ -366,6 +385,10 @@ _enforce_admin_config() {
     local _saved_bev=("${BLOCKED_ENV_VARS[@]}")
     local _saved_ebp=("${EXTRA_BLOCKED_PATHS[@]}")
     local _saved_hw=("${HOME_WRITABLE[@]}")
+    local _saved_ewp=("${EXTRA_WRITABLE_PATHS[@]}")
+    local _saved_rom=("${READONLY_MOUNTS[@]}")
+    local _saved_hro=("${HOME_READONLY[@]}")
+    local _saved_app=("${ALLOWED_PROJECT_PARENTS[@]}")
 
     # Warn about removed admin entries
     local _a _item _found _aro
@@ -420,6 +443,26 @@ _enforce_admin_config() {
         for _a in "${_ADMIN_EXTRA_BLOCKED_PATHS[@]}"; do [[ "$_item" == "$_a" ]] && { _in_admin=true; break; }; done
         $_in_admin || EXTRA_BLOCKED_PATHS+=("$_item")
     done
+    for _item in "${_saved_ewp[@]}"; do
+        _in_admin=false
+        for _a in "${_ADMIN_EXTRA_WRITABLE_PATHS[@]}"; do [[ "$_item" == "$_a" ]] && { _in_admin=true; break; }; done
+        $_in_admin || EXTRA_WRITABLE_PATHS+=("$_item")
+    done
+    for _item in "${_saved_rom[@]}"; do
+        _in_admin=false
+        for _a in "${_ADMIN_READONLY_MOUNTS[@]}"; do [[ "$_item" == "$_a" ]] && { _in_admin=true; break; }; done
+        $_in_admin || READONLY_MOUNTS+=("$_item")
+    done
+    for _item in "${_saved_hro[@]}"; do
+        _in_admin=false
+        for _a in "${_ADMIN_HOME_READONLY[@]}"; do [[ "$_item" == "$_a" ]] && { _in_admin=true; break; }; done
+        $_in_admin || HOME_READONLY+=("$_item")
+    done
+    for _item in "${_saved_app[@]}"; do
+        _in_admin=false
+        for _a in "${_ADMIN_ALLOWED_PROJECT_PARENTS[@]}"; do [[ "$_item" == "$_a" ]] && { _in_admin=true; break; }; done
+        $_in_admin || ALLOWED_PROJECT_PARENTS+=("$_item")
+    done
 
     # Remove admin HOME_READONLY items from HOME_WRITABLE
     local _clean_writable=() _is_admin_ro
@@ -431,6 +474,43 @@ _enforce_admin_config() {
         $_is_admin_ro || _clean_writable+=("$_item")
     done
     HOME_WRITABLE=("${_clean_writable[@]}")
+
+    # Enforce DENIED_WRITABLE_PATHS: strip any EXTRA_WRITABLE_PATHS or
+    # HOME_WRITABLE entry that matches or is under a denied path.
+    if [[ ${#_ADMIN_DENIED_WRITABLE_PATHS[@]} -gt 0 ]]; then
+        local _clean_extra=() _denied _full_path
+
+        for _item in "${EXTRA_WRITABLE_PATHS[@]}"; do
+            _found=false
+            for _denied in "${_ADMIN_DENIED_WRITABLE_PATHS[@]}"; do
+                _denied="${_denied/\$HOME/$HOME}"
+                _denied="${_denied%/}"
+                if [[ "$_item" == "$_denied" || "$_item" == "$_denied/"* ]]; then
+                    echo "WARNING: ${_label} added EXTRA_WRITABLE_PATHS entry '${_item}' under denied path '${_denied}' — removed." >&2
+                    _found=true; break
+                fi
+            done
+            $_found || _clean_extra+=("$_item")
+        done
+        EXTRA_WRITABLE_PATHS=("${_clean_extra[@]}")
+
+        # Also check HOME_WRITABLE (entries are $HOME-relative)
+        local _clean_hw=()
+        for _item in "${HOME_WRITABLE[@]}"; do
+            _full_path="$HOME/$_item"
+            _found=false
+            for _denied in "${_ADMIN_DENIED_WRITABLE_PATHS[@]}"; do
+                _denied="${_denied/\$HOME/$HOME}"
+                _denied="${_denied%/}"
+                if [[ "$_full_path" == "$_denied" || "$_full_path" == "$_denied/"* ]]; then
+                    echo "WARNING: ${_label} added HOME_WRITABLE entry '${_item}' under denied path '${_denied}' — removed." >&2
+                    _found=true; break
+                fi
+            done
+            $_found || _clean_hw+=("$_item")
+        done
+        HOME_WRITABLE=("${_clean_hw[@]}")
+    fi
 }
 
 # ── Per-project config overrides ─────────────────────────────────
