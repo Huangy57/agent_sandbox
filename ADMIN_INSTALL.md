@@ -259,34 +259,37 @@ On Ubuntu 24.04+, AppArmor blocks unprivileged user namespaces, so bwrap doesn't
 
 ### Enabling bwrap via AppArmor profile
 
-Create an AppArmor profile that allows bwrap to create user namespaces:
+Install bwrap and create an AppArmor profile that allows it to create user namespaces:
 
 ```bash
-# Find bwrap path (may be /usr/bin/bwrap or ~/.linuxbrew/bin/bwrap)
-BWRAP_PATH=$(command -v bwrap)
+# 1. Install bwrap
+sudo apt install bubblewrap
+
+# 2. Create AppArmor profile
+BWRAP_PATH=$(command -v bwrap)   # typically /usr/bin/bwrap
 
 cat > /etc/apparmor.d/bwrap-sandbox << EOF
 abi <abi/4.0>,
 include <tunables/global>
 
-profile bwrap $BWRAP_PATH flags=(unconfined) {
+profile bwrap-sandbox $BWRAP_PATH flags=(unconfined) {
   userns,
 }
 EOF
 
-apparmor_parser -r /etc/apparmor.d/bwrap-sandbox
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-sandbox
 ```
 
-This allows bwrap (and only bwrap) to create user namespaces. Other programs remain restricted. The profile survives reboots. Verify with:
+This allows bwrap to create user namespaces. Other programs remain restricted. The profile survives reboots. Verify:
 
 ```bash
 # As a regular user — should work after the profile is loaded
 bwrap --ro-bind / / -- id
 ```
 
-The sandbox auto-detects bwrap from `$PATH`, or admins can set `BWRAP=/path/to/bwrap` in `sandbox.conf` to pin a specific binary. Without admin intervention, users can install bwrap themselves via [Homebrew](https://brew.sh/) (`brew install bubblewrap`), which places it at `~/.linuxbrew/bin/bwrap`.
+The sandbox auto-detects bwrap from `$PATH`, or admins can set `BWRAP=/path/to/bwrap` in `sandbox.conf` to pin a specific binary. Users can also install bwrap via [Homebrew](https://brew.sh/) (`brew install bubblewrap`) — the AppArmor profile would need to include that path too (`~/.linuxbrew/bin/bwrap`) or a second profile entry.
 
-**Hardening note:** The AppArmor profile grants `userns` permission only to the binary at the exact path specified. If the admin installs bwrap to a controlled location and uses that path in the profile, users cannot gain user namespace access by compiling or installing their own copy elsewhere. This is stronger than per-user Homebrew installs, where each user controls the binary.
+**Note:** The AppArmor profile grants `userns` to any invocation of bwrap at the profiled path, not just sandbox-initiated ones. This is acceptable — bwrap user namespaces are unprivileged and cannot escalate beyond what the calling user already has access to. The sandbox adds filesystem restrictions on top.
 
 ### Firejail backend (alternative to bwrap)
 
