@@ -9,25 +9,31 @@
 # The token is never passed as a CLI argument (invisible in /proc/*/cmdline).
 # Any _SANDBOX_BYPASS in --export= flags is stripped.
 #
-# Deployment — see sandbox-wrapper.conf for path configuration.
-#
+# Deployment:
 #   sudo mkdir -p /usr/libexec/slurm
 #   sudo mv /usr/bin/sbatch /usr/libexec/slurm/sbatch
 #   sudo cp sbatch-token-wrapper.sh /usr/bin/sbatch
 #   sudo chmod +x /usr/bin/sbatch
-#   sudo cp sandbox-wrapper.conf /etc/slurm/sandbox-wrapper.conf
+#
+# Config: sandbox-wrapper.conf, or the admin sandbox config (one file
+# for both sandbox + Slurm enforcement). Change ADMIN_CONF below if
+# the admin sandbox is installed to a different path.
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Source configuration (check next to script, then /etc/slurm)
+# Admin config path. Change during deployment if using a different location.
+# Not read from environment (an agent could redirect it to a controlled dir).
+_ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+
+# Source configuration (check: next to script → admin sandbox config)
 if [[ -f "$SCRIPT_DIR/sandbox-wrapper.conf" ]]; then
     source "$SCRIPT_DIR/sandbox-wrapper.conf"
-elif [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
-    source /etc/slurm/sandbox-wrapper.conf
+elif [[ -f "$_ADMIN_CONF" ]]; then
+    source "$_ADMIN_CONF"
 fi
 
 # Defaults if not set by config
-TOKEN_FILE="${TOKEN_FILE:-/etc/slurm/.sandbox-bypass-token}"
+TOKEN_FILE="${TOKEN_FILE:-${_ADMIN_CONF%/*}/.sandbox-bypass-token}"
 REAL_SBATCH="${REAL_SBATCH:-/usr/libexec/slurm/sbatch}"
 
 # Fall back to /usr/bin/sbatch if relocated binary doesn't exist

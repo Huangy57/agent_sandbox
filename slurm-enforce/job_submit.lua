@@ -10,10 +10,10 @@
 -- processes via eBPF LSM (denies read when PR_SET_NO_NEW_PRIVS is set).
 -- See ADMIN_HARDENING.md §1.
 --
--- Reads TOKEN_FILE and SANDBOX_EXEC from sandbox-wrapper.conf (single
--- source of truth shared with the sbatch/srun wrappers).
+-- Reads TOKEN_FILE and SANDBOX_EXEC from the admin sandbox config or
+-- sandbox-wrapper.conf (same search order as all other components).
 
--- Parse sandbox-wrapper.conf (KEY="value" or KEY=value, ignoring comments)
+-- Parse config files (KEY="value" or KEY=value, ignoring comments/arrays)
 local function read_conf(path)
     local conf = {}
     local f = io.open(path, "r")
@@ -29,9 +29,14 @@ local function read_conf(path)
     return conf
 end
 
-local conf = read_conf("/etc/slurm/sandbox-wrapper.conf")
-local TOKEN_FILE = conf["TOKEN_FILE"] or "/etc/slurm/.sandbox-bypass-token"
-local SANDBOX_EXEC = conf["SANDBOX_EXEC"] or "/app/sandbox/sandbox-exec.sh"
+-- Admin config path. Change during deployment if using a different location.
+local ADMIN_CONF = "/opt/claude-sandbox/sandbox.conf"
+local ADMIN_DIR = ADMIN_CONF:match("(.*)/") or "/opt/claude-sandbox"
+
+-- Read config from admin sandbox config
+local conf = read_conf(ADMIN_CONF)
+local TOKEN_FILE = conf["TOKEN_FILE"] or conf["SANDBOX_BYPASS_TOKEN"] or (ADMIN_DIR .. "/.sandbox-bypass-token")
+local SANDBOX_EXEC = conf["SANDBOX_EXEC"] or (ADMIN_DIR .. "/sandbox-exec.sh")
 
 -- Read the bypass token once (re-read on each submission since Slurm
 -- reloads the script each time).

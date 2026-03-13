@@ -2,25 +2,29 @@
 
 An admin-owned installation solves two problems:
 
-1. **Sandbox self-protection** — scripts are tamper-proof (the agent can't write to admin-owned paths). Without this, an agent could modify sandbox scripts to weaken future sessions. The current session is always safe (kernel rules are irrevocable once applied), but future sessions and submitted Slurm jobs are at risk.
+1. **Config protection** — the admin config is tamper-proof (root-owned, outside the user's sandbox dir). Sandbox scripts are additionally protected by bwrap/firejail mount namespaces (read-only inside the sandbox). With Landlock, scripts in `~/.claude/sandbox/` remain writable — the current session is safe (kernel rules are irrevocable), but future sessions are at risk; see [Landlock fallback](#landlock-fallback).
 2. **Policy enforcement** — the admin sets a security baseline that users cannot weaken. Users can customize within bounds (add data mounts, extra blocked paths) but cannot remove admin-enforced protections.
 
 ## Quick Setup
 
+Install the admin config to a root-owned path:
+
 ```bash
-# 1. Install scripts to a root-owned path
-sudo cp -r agent_sandbox /opt/claude-sandbox
+# 1. Copy the sandbox config to a root-owned directory
+sudo mkdir -p /opt/claude-sandbox
+sudo cp sandbox.conf /opt/claude-sandbox/sandbox.conf
 sudo chown -R root:root /opt/claude-sandbox
 sudo chmod -R 755 /opt/claude-sandbox
 
 # 2. Edit the admin config
 sudo $EDITOR /opt/claude-sandbox/sandbox.conf
-
-# 3. Users symlink to the admin-managed copy
-ln -sf /opt/claude-sandbox ~/.claude/sandbox
 ```
 
-Users get sandboxing without managing or misconfiguring policy. The agent cannot tamper with the scripts, `sandbox.conf`, or Slurm wrappers — even across sessions. The `CLAUDE.md` and `settings.json` overlays are not affected — they live in a per-session config directory (`CLAUDE_CONFIG_DIR`) rebuilt on each sandbox start from the user's real `~/.claude/` config.
+That's it. The sandbox auto-detects `/opt/claude-sandbox/sandbox.conf` at startup and treats it as the admin security baseline. Users keep their own `~/.claude/sandbox/` directory (writable, for temp files and `user.conf`).
+
+The admin path is set in the `_ADMIN_DIR` variable in `sandbox-lib.sh` (not configurable via environment variable — an agent could redirect it to an attacker-controlled directory). To use a different path, change this single line. The Slurm enforcement scripts (`slurm-enforce/`) have their own `_ADMIN_CONF` variable at the top of each script for the same reason.
+
+**What this protects:** The admin config is tamper-proof (root-owned). The sandbox scripts themselves are protected by bwrap/firejail mount namespaces (made read-only inside the sandbox). With the Landlock backend, scripts in the user's `~/.claude/sandbox/` remain writable — the current session is safe (kernel rules are irrevocable), but an agent could modify scripts to weaken future sessions. This is a [known Landlock limitation](#landlock-fallback); use bwrap or firejail for full self-protection.
 
 ## Config Hierarchy
 
@@ -28,12 +32,12 @@ The sandbox loads config in layers, each adding to the previous:
 
 ```
 1. Defaults           (built into sandbox-lib.sh)
-2. Admin config       (/opt/claude-sandbox/sandbox.conf)     ← security baseline
+2. Admin config       (/opt/claude-sandbox/sandbox.conf)     ← security baseline (if present)
 3. User config        (~/.claude/sandbox/user.conf)          ← additive customization
-4. Per-project config (conf.d/*.conf)                        ← project-specific additions
+4. Per-project config (~/.claude/sandbox/conf.d/*.conf)      ← project-specific additions
 ```
 
-Without an admin config at `/opt/claude-sandbox/sandbox.conf`, the sandbox loads a single `sandbox.conf` from `$SANDBOX_DIR` — identical to the user-only install.
+Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.claude/sandbox/` — identical to the user-only install (layers 2 and 3 collapse into one).
 
 ### What users can customize
 
@@ -43,35 +47,39 @@ Without an admin config at `/opt/claude-sandbox/sandbox.conf`, the sandbox loads
 | `EXTRA_WRITABLE_PATHS` | Yes — add writable directories | N/A (additive) |
 | `HOME_READONLY` | Yes — expose more dotfiles | N/A (additive) |
 | `HOME_WRITABLE` | Yes (but not items in admin's `HOME_READONLY`) | N/A (additive) |
-| `BLOCKED_FILES` | Yes — block more files | **No — hard error** |
-| `BLOCKED_ENV_VARS` | Yes — block more env vars | **No — hard error** |
-| `EXTRA_BLOCKED_PATHS` | Yes — block more paths | **No — hard error** |
+| `BLOCKED_FILES` | Yes — block more files | **No — restored with warning** |
+| `BLOCKED_ENV_VARS` | Yes — block more env vars | **No — restored with warning** |
+| `EXTRA_BLOCKED_PATHS` | Yes — block more paths | **No — restored with warning** |
+| `TOKEN_FILE` / `SANDBOX_BYPASS_TOKEN` | — | **No — restored with warning** |
 | `PRIVATE_TMP` | Yes | Yes |
 | `BIND_DEV_PTS` | Yes | Yes |
 | `FILTER_PASSWD` | Yes | Yes |
 | `SANDBOX_BACKEND` | Yes | Yes |
 
-### Post-merge validation
+### Admin enforcement: re-apply, not validate
 
-After loading each config layer, the sandbox validates that all admin-enforced entries are still present. If a user or project config removes an admin entry or escalates a read-only path to writable, the sandbox **refuses to start** with a clear error:
+After sourcing each user/project config layer, the sandbox **re-sources the admin config** and merges user additions on top. Admin-enforced values are forcefully restored regardless of what the user config did — even if it ran arbitrary code (redefined functions, manipulated variables).
+
+This is more robust than a validate-and-fail approach: validation relies on functions that user config could override before they run. The re-apply approach doesn't depend on any functions executing after user config — the merge logic is inline in `sandbox-lib.sh`, which is admin-owned and protected by the sandbox's mount namespace (bwrap/firejail).
+
+**Enforced arrays** (`BLOCKED_FILES`, `BLOCKED_ENV_VARS`, `EXTRA_BLOCKED_PATHS`): admin entries are always present. User additions are preserved, but user removals are undone with a warning:
 
 ```
-Error: User config violates admin-enforced security policy:
-  - BLOCKED_ENV_VARS: admin entry 'GITHUB_TOKEN' was removed
-  - HOME_READONLY→HOME_WRITABLE: admin read-only entry '.gnupg' moved to writable
-
-Admin config: /opt/claude-sandbox/sandbox.conf
-User config:  /home/alice/.claude/sandbox/user.conf
+WARNING: User config removed admin-enforced BLOCKED_ENV_VARS entry 'GITHUB_TOKEN' — restored.
 ```
 
-A hard error (not a warning) is necessary — if the admin blocked a path for security reasons, silently allowing a user to unblock it would defeat the purpose.
+**HOME_READONLY → HOME_WRITABLE escalation**: if a user config moves an admin read-only entry to writable, the escalation is reverted with a warning:
+
+```
+WARNING: User config moved admin HOME_READONLY entry '.gnupg' to HOME_WRITABLE — reverted.
+```
 
 ## Example Admin Config
 
-The admin config at `/opt/claude-sandbox/sandbox.conf` sets the security baseline. It uses the same format as the standard `sandbox.conf`:
+The admin `sandbox.conf` sets the security baseline. It uses the same format as the standard `sandbox.conf`:
 
 ```bash
-# /opt/claude-sandbox/sandbox.conf — Admin security baseline
+# sandbox.conf — Admin security baseline
 # Users can ADD to these arrays via ~/.claude/sandbox/user.conf
 # but CANNOT remove entries set here.
 
@@ -86,9 +94,10 @@ READONLY_MOUNTS=(
     "/app"
 )
 
-# These entries are enforced — users cannot remove them
+# Files inside readable/writable dirs that should be hidden from the agent
+# (overlaid with /dev/null — bwrap/firejail only, no effect on Landlock).
 BLOCKED_FILES=(
-    ".claude/settings.json"
+    "$HOME/.claude/settings.json"       # agent can't modify permission settings
 )
 
 BLOCKED_ENV_VARS=(
@@ -97,8 +106,10 @@ BLOCKED_ENV_VARS=(
     "AWS_ACCESS_KEY_ID" "AWS_SECRET_ACCESS_KEY" "AWS_SESSION_TOKEN"
 )
 
+# Sensitive directories under READONLY_MOUNTS that should be hidden entirely
 EXTRA_BLOCKED_PATHS=(
     "/fh/fast/mylab/clinical_restricted"
+    "/fh/fast/mylab/phi_data"
 )
 
 HOME_READONLY=(
@@ -114,6 +125,20 @@ HOME_WRITABLE=(
 
 PRIVATE_TMP=true
 FILTER_PASSWD=true
+
+# ── Slurm Enforcement (optional — see slurm-enforce/README.md) ──
+#
+# These variables are also read by the Slurm token wrappers
+# (sbatch-token-wrapper.sh, srun-token-wrapper.sh), so a single config
+# file can drive both the sandbox and the Slurm enforcement layer.
+# If not set here, the wrappers use defaults derived from _ADMIN_CONF.
+
+# Bypass token file — bwrap/firejail hide this inside the sandbox.
+# Landlock needs eBPF LSM protection (token_protect.bpf.c).
+# TOKEN_FILE="/opt/claude-sandbox/.sandbox-bypass-token"
+# REAL_SBATCH="/usr/libexec/slurm/sbatch"
+# REAL_SRUN="/usr/libexec/slurm/srun"
+# SANDBOX_EXEC="/opt/claude-sandbox/sandbox-exec.sh"
 ```
 
 ## Example User Config
@@ -145,12 +170,12 @@ Note the `+=` syntax — this appends to the admin's arrays. Using `=()` to repl
 
 ## Per-Project Overrides
 
-Per-project configs in `conf.d/*.conf` work the same way as in user-only installs. In an admin-owned installation, the `conf.d/` directory is at `/opt/claude-sandbox/conf.d/` and is admin-controlled.
+Per-project configs in `~/.claude/sandbox/conf.d/*.conf` are user-controlled and subject to the same post-merge validation as `user.conf` (cannot remove admin-enforced entries).
 
-Users can request the admin to add project-specific overrides, or the admin can create configs that conditionally activate based on project path:
+Example — a project-specific config that conditionally activates based on project path:
 
 ```bash
-# /opt/claude-sandbox/conf.d/genomics.conf
+# conf.d/genomics.conf
 [[ "$_PROJECT_DIR" == /fh/fast/mylab/genomics/* ]] || return 0
 
 READONLY_MOUNTS+=(
@@ -327,4 +352,4 @@ Option A prevents the user systemd instance from starting at all. Verify with `s
 
 An admin-owned installation pairs with:
 
-- **[Slurm job enforcement](admin/README.md)** — ensures agent-submitted Slurm jobs inherit the sandbox
+- **[Slurm job enforcement](slurm-enforce/README.md)** — ensures agent-submitted Slurm jobs inherit the sandbox. All Slurm enforcement variables (`TOKEN_FILE`, `REAL_SBATCH`, `REAL_SRUN`, `SANDBOX_EXEC`) can be added directly to `/opt/claude-sandbox/sandbox.conf` — one config file for both systems. See the [example admin config](#example-admin-config) for the Slurm variables.

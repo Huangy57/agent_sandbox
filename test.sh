@@ -871,8 +871,8 @@ else
         if [[ -f "$SCRIPT_DIR/sandbox.conf" ]]; then
             _TOKEN_PATH=$(bash -c "source '$SCRIPT_DIR/sandbox.conf' 2>/dev/null; echo \"\$SANDBOX_BYPASS_TOKEN\"")
         fi
-        if [[ -z "$_TOKEN_PATH" && -f /etc/slurm/sandbox-wrapper.conf ]]; then
-            _TOKEN_PATH=$(bash -c 'source /etc/slurm/sandbox-wrapper.conf 2>/dev/null; echo "$TOKEN_FILE"')
+        if [[ -z "$_TOKEN_PATH" && -f /opt/claude-sandbox/sandbox.conf ]]; then
+            _TOKEN_PATH=$(bash -c 'source /opt/claude-sandbox/sandbox.conf 2>/dev/null; echo "$TOKEN_FILE"')
         fi
         if [[ -n "$_TOKEN_PATH" && -f "$_TOKEN_PATH" ]]; then
             # Landlock sets NO_NEW_PRIVS — eBPF should deny the read
@@ -886,7 +886,7 @@ else
                 fi
             fi
         else
-            skip "SANDBOX_BYPASS_TOKEN — eBPF loaded but no token path found (sandbox.conf or /etc/slurm/sandbox-wrapper.conf)"
+            skip "SANDBOX_BYPASS_TOKEN — eBPF loaded but no token path found (sandbox.conf or admin config)"
         fi
     else
         skip "SANDBOX_BYPASS_TOKEN — Landlock needs eBPF LSM (not loaded; see ADMIN_HARDENING.md §1)"
@@ -919,8 +919,8 @@ done
 # ── Admin wrapper tests (if sandbox-wrapper.conf is deployed) ────
 
 WRAPPER_CONF=""
-if [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
-    WRAPPER_CONF="/etc/slurm/sandbox-wrapper.conf"
+if [[ -f /opt/claude-sandbox/sandbox.conf ]]; then
+    WRAPPER_CONF="/opt/claude-sandbox/sandbox.conf"
 elif [[ -f "$SCRIPT_DIR/slurm-enforce/sandbox-wrapper.conf" ]]; then
     WRAPPER_CONF="$SCRIPT_DIR/slurm-enforce/sandbox-wrapper.conf"
 fi
@@ -1100,8 +1100,8 @@ _s1_missing=()
 _token_path=""
 if [[ -n "${TOKEN_FILE:-}" ]]; then
     _token_path="$TOKEN_FILE"
-elif [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
-    _token_path=$(bash -c 'source /etc/slurm/sandbox-wrapper.conf 2>/dev/null; echo "$TOKEN_FILE"')
+elif [[ -f /opt/claude-sandbox/sandbox.conf ]]; then
+    _token_path=$(bash -c 'source /opt/claude-sandbox/sandbox.conf 2>/dev/null; echo "$TOKEN_FILE"')
 fi
 if [[ -n "$_token_path" && -f "$_token_path" ]]; then
     _s1_parts+=("bypass token")

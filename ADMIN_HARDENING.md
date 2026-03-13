@@ -34,17 +34,22 @@ The current user-space sandbox is entirely self-serve: it protects against accid
 | User outside sandbox | Reads token → passes to sbatch → **unsandboxed** |
 | `curl` to `slurmrestd` | Works if exposed (see §4 for network isolation) |
 
-Design, setup instructions, components, and verification steps are in [`slurm-enforce/README.md`](slurm-enforce/README.md).
+Design, setup instructions, components, and verification steps are in [`slurm-enforce/README.md`](slurm-enforce/README.md). If also deploying Section 2, the Slurm enforcement variables can go directly in `/opt/claude-sandbox/sandbox.conf` — one config file for both systems.
 
 ---
 
 ## 2. Admin-Owned Sandbox Installation
 
-**What it solves:** Sandbox self-protection (agent can't modify scripts) and policy enforcement (admin sets a security baseline that users cannot weaken). Users can customize within bounds via a separate `user.conf` — adding data mounts and extra blocked paths — but cannot remove admin-enforced protections like blocked credentials or hidden paths.
+**What it solves:** Two problems at once — **sandbox self-protection** (agent can't modify scripts, even across sessions) and **policy enforcement** (admin sets a security baseline that users cannot weaken). Users can customize within bounds via a separate `user.conf` — adding data mounts and extra blocked paths — but cannot remove admin-enforced protections like blocked credentials or hidden paths.
 
 **Effort:** Low-medium. **Category:** Admin-enforced.
 
-For setup instructions, config hierarchy, and enforcement details, see **[ADMIN_INSTALL.md](ADMIN_INSTALL.md)**.
+Key features:
+- **Multi-level config** — admin `sandbox.conf` (hardcoded at `/opt/claude-sandbox/`) sets the baseline; user config (`user.conf`) and per-project configs (`conf.d/*.conf`) can only add to it. The path is hardcoded (not an env var) to prevent agent redirection. Post-merge validation refuses to start if a user config removes admin-enforced entries.
+- **Backend selection** — on Ubuntu 24.04+, AppArmor blocks unprivileged user namespaces. An admin AppArmor profile (low effort) enables the recommended bwrap backend. Firejail (setuid) is an alternative. Without either, the sandbox falls back to Landlock with [significant gaps](ADMIN_INSTALL.md#landlock-fallback).
+- **Seccomp trade-offs** — the Landlock and firejail backends block `io_uring` and `userfaultfd` via seccomp. A bwrap seccomp filter is supported but not yet included. See [HPC compatibility analysis](ADMIN_INSTALL.md#seccomp-filter--hpc-compatibility).
+
+For full setup instructions, config hierarchy, backend comparison, and seccomp details, see **[ADMIN_INSTALL.md](ADMIN_INSTALL.md)**.
 
 ---
 
@@ -219,15 +224,13 @@ The separate account/QOS makes it trivial to query, report on, and set limits fo
 
 | # | Improvement | Effort | Category | What It Closes |
 |---|---|---|---|---|
-| 1 | Enforce sandbox on agent-submitted Slurm jobs | Medium | Admin-enforced | Agent submitting unsandboxed Slurm jobs — job submit plugin sandboxes all jobs unless caller provides bypass token (eBPF LSM protects token from `no_new_privs` processes) |
-| 2 | Admin-owned sandbox installation | Low-medium | Admin-enforced | Users weakening their own sandbox config; sandbox self-protection; systemd-run escape on Landlock nodes (disable `user@.service`) |
-| 2a | Enable bwrap via AppArmor (Ubuntu 24.04+) | Low | Admin-enforced | Landlock fallback limitations — mount namespace, PID namespace, `/tmp` isolation, self-protection |
-| 2b | Install firejail (alternative to 2a) | Low | Admin-enforced | Same as 2a, via setuid binary instead of AppArmor profile |
-| 3 | Dedicated `${USER}_ai` accounts | High | Admin-enforced | Same-UID credential access; OS-level separation |
-| 4 | Network isolation | Medium-high | Admin-enforced (requires #3) | Data exfiltration via network |
-| 5 | Audit logging | Low-medium | Admin-enforced (requires #3) | Visibility, compliance, forensics |
+| 1 | [Enforce sandbox on Slurm jobs](#1-enforce-sandbox-on-agent-submitted-slurm-jobs) | Medium | Admin-enforced | Agent submitting unsandboxed Slurm jobs — job submit plugin sandboxes all jobs unless caller provides bypass token (eBPF LSM protects token from `no_new_privs` processes) |
+| 2 | [Admin-owned sandbox installation](#2-admin-owned-sandbox-installation) ([details](ADMIN_INSTALL.md)) | Low-medium | Admin-enforced | Users weakening config; sandbox self-protection; multi-level config with post-merge validation; [backend selection](ADMIN_INSTALL.md#choosing-a-backend-on-ubuntu-2404) (bwrap via AppArmor recommended, firejail alternative); [seccomp trade-offs](ADMIN_INSTALL.md#seccomp-filter--hpc-compatibility); [Landlock fallback gaps](ADMIN_INSTALL.md#landlock-fallback) |
+| 3 | [Dedicated `${USER}_ai` accounts](#3-dedicated-user_ai-accounts) | High | Admin-enforced | Same-UID credential access; OS-level separation |
+| 4 | [Network isolation](#4-network-isolation) | Medium-high | Admin-enforced (requires #3) | Data exfiltration via network |
+| 5 | [Audit logging](#5-audit-logging) | Low-medium | Admin-enforced (requires #3) | Visibility, compliance, forensics |
 
-Sections 1 and 2 (including 2a/2b) are independent and can be deployed individually. On Ubuntu 24.04+, deploying 2a (AppArmor profile for bwrap) or 2b (firejail) is recommended — without either, the sandbox falls back to Landlock with significant gaps. Sections 4 and 5 require Section 3 (dedicated accounts).
+Sections 1 and 2 are independent and can be deployed individually. Section 2 includes backend selection for Ubuntu 24.04+ — an AppArmor profile for bwrap (recommended) or firejail avoids falling back to Landlock. Sections 4 and 5 require Section 3 (dedicated accounts).
 
 ---
 

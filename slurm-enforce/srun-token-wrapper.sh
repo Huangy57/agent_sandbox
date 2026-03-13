@@ -10,27 +10,34 @@
 # server-side enforcement. This wrapper is the only defense-in-depth layer
 # for srun beyond the in-sandbox PATH shadowing.
 #
-# Deployment — see sandbox-wrapper.conf for path configuration.
-#
+# Deployment:
 #   sudo mkdir -p /usr/libexec/slurm
 #   sudo mv /usr/bin/srun /usr/libexec/slurm/srun
 #   sudo cp srun-token-wrapper.sh /usr/bin/srun
 #   sudo chmod +x /usr/bin/srun
-#   sudo cp sandbox-wrapper.conf /etc/slurm/sandbox-wrapper.conf
+#
+# Config: sandbox-wrapper.conf, or the admin sandbox config (one file
+# for both sandbox + Slurm enforcement). Change _ADMIN_CONF below if
+# the admin sandbox is installed to a different path.
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Source configuration (check next to script, then /etc/slurm)
+# Admin config path. Change during deployment if using a different location.
+# Not read from environment (an agent could redirect it to a controlled dir).
+_ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+
+# Source configuration (check: next to script → admin sandbox config)
 if [[ -f "$SCRIPT_DIR/sandbox-wrapper.conf" ]]; then
     source "$SCRIPT_DIR/sandbox-wrapper.conf"
-elif [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
-    source /etc/slurm/sandbox-wrapper.conf
+elif [[ -f "$_ADMIN_CONF" ]]; then
+    source "$_ADMIN_CONF"
 fi
 
-# Defaults if not set by config
-TOKEN_FILE="${TOKEN_FILE:-/etc/slurm/.sandbox-bypass-token}"
+# Defaults if not set by config (derive paths from admin config location)
+_ADMIN_DIR="${_ADMIN_CONF%/*}"
+TOKEN_FILE="${TOKEN_FILE:-$_ADMIN_DIR/.sandbox-bypass-token}"
 REAL_SRUN="${REAL_SRUN:-/usr/libexec/slurm/srun}"
-SANDBOX_EXEC="${SANDBOX_EXEC:-/app/sandbox/sandbox-exec.sh}"
+SANDBOX_EXEC="${SANDBOX_EXEC:-$_ADMIN_DIR/sandbox-exec.sh}"
 
 # Fall back to /usr/bin/srun if relocated binary doesn't exist
 if [[ ! -x "$REAL_SRUN" ]]; then

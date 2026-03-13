@@ -28,10 +28,11 @@ if [[ "${SANDBOX_ACTIVE:-}" == "1" ]]; then
         REAL_SBATCH="${REAL_SBATCH:-/usr/bin/sbatch}"
     fi
 else
-    # If admin wrappers are deployed (sandbox-wrapper.conf exists), use the
-    # configured real binary path to skip the admin wrapper indirection.
-    if [[ -z "${REAL_SBATCH:-}" && -f /etc/slurm/sandbox-wrapper.conf ]]; then
-        source /etc/slurm/sandbox-wrapper.conf
+    # If admin wrappers are deployed, source the admin config to get
+    # the real binary path and skip the admin wrapper indirection.
+    _ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+    if [[ -z "${REAL_SBATCH:-}" && -f "$_ADMIN_CONF" ]]; then
+        source "$_ADMIN_CONF"
     fi
     REAL_SBATCH="${REAL_SBATCH:-/usr/bin/sbatch}"
 fi

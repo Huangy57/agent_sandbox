@@ -7,7 +7,7 @@
 # Usage:
 #   sudo ./load-token-protect.sh
 #
-# Reads TOKEN_FILE from sandbox-wrapper.conf (single source of truth).
+# Reads TOKEN_FILE from the admin sandbox config or sandbox-wrapper.conf.
 #
 # For /etc/rc.local or a systemd unit, use an absolute path:
 #   /path/to/slurm-enforce/load-token-protect.sh
@@ -19,13 +19,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Source config — same file the sbatch/srun wrappers use
-if [[ -f /etc/slurm/sandbox-wrapper.conf ]]; then
-    source /etc/slurm/sandbox-wrapper.conf
-elif [[ -f "$SCRIPT_DIR/sandbox-wrapper.conf" ]]; then
+# Admin config path. Change during deployment if using a different location.
+_ADMIN_CONF="/opt/claude-sandbox/sandbox.conf"
+
+# Source config (check: next to script → admin sandbox config)
+if [[ -f "$SCRIPT_DIR/sandbox-wrapper.conf" ]]; then
     source "$SCRIPT_DIR/sandbox-wrapper.conf"
+elif [[ -f "$_ADMIN_CONF" ]]; then
+    source "$_ADMIN_CONF"
 fi
-TOKEN_FILE="${TOKEN_FILE:-/etc/slurm/.sandbox-bypass-token}"
+TOKEN_FILE="${TOKEN_FILE:-${_ADMIN_CONF%/*}/.sandbox-bypass-token}"
 BPF_OBJ="$SCRIPT_DIR/token_protect.bpf.o"
 BPF_PIN="/sys/fs/bpf/token_protect"
 
