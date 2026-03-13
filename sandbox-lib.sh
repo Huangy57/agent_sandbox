@@ -282,7 +282,7 @@ _load_untrusted_config() {
         # function, this calls the attacker'\''s code — but the parent
         # validates the output before eval'\''ing it (see below).
         declare -p '"$_var_names"' 2>/dev/null
-    ' -- "$_parent_state" "$_conf" "$_label" )" || _exit_code=$?
+    ' -- "$_parent_state" "$_conf" )" || _exit_code=$?
 
     if [[ $_exit_code -ne 0 ]]; then
         echo "WARNING: ${_label} exited with code ${_exit_code} — using values it set before exiting." >&2
