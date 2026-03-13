@@ -213,10 +213,10 @@ backend_prepare() {
         fi
     done
 
-    # Protect the real CLAUDE.md from persistence attacks — the agent should
-    # only write to the sandbox-config copy (via CLAUDE_CONFIG_DIR).
-    if [[ -f "$HOME/.claude/CLAUDE.md" ]]; then
-        FIREJAIL_ARGS+=(--read-only="$HOME/.claude/CLAUDE.md")
+    # Hide the real CLAUDE.md entirely — the agent should only see the
+    # merged sandbox-config copy (via CLAUDE_CONFIG_DIR).
+    if [[ -e "$HOME/.claude/CLAUDE.md" ]]; then
+        FIREJAIL_ARGS+=(--blacklist="$HOME/.claude/CLAUDE.md")
     fi
 
     # --- Blocked files ---

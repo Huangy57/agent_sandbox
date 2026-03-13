@@ -110,13 +110,14 @@ SLURM_EOF
 
     # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
     # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
-    # Protect the REAL CLAUDE.md from modification — the agent should only
-    # write to the sandbox-config copy (via CLAUDE_CONFIG_DIR). Without this,
-    # a compromised agent could inject persistent instructions into the user's
-    # real CLAUDE.md that affect all future sessions (persistence attack).
+    # Hide the real CLAUDE.md entirely — the agent should only see the
+    # merged sandbox-config copy (via CLAUDE_CONFIG_DIR).  Hiding it
+    # prevents persistence attacks.  Resolve symlinks because bwrap
+    # can't bind-mount over a symlink target.
     local _real_claude_md="$HOME/.claude/CLAUDE.md"
-    if [[ -f "$_real_claude_md" ]]; then
-        BWRAP_ARGS+=(--ro-bind "$_real_claude_md" "$_real_claude_md")
+    if [[ -e "$_real_claude_md" ]]; then
+        _real_claude_md="$(readlink -f "$_real_claude_md")"
+        BWRAP_ARGS+=(--ro-bind /dev/null "$_real_claude_md")
     fi
 
     for blocked in "${BLOCKED_FILES[@]}"; do
