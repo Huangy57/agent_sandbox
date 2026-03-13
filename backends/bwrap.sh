@@ -214,6 +214,20 @@ SLURM_EOF
 }
 
 backend_exec() {
+    # Scrub sensitive vars from OUR environment before exec'ing bwrap.
+    # --unsetenv only cleans the child (PID 2); bwrap itself is PID 1
+    # inside --unshare-pid and its /proc/1/environ retains whatever the
+    # parent had.  By unsetting here, bwrap inherits a clean environment
+    # and /proc/1/environ is safe.  The --unsetenv flags remain as
+    # defense-in-depth.
+    for _var in "${BLOCKED_ENV_VARS[@]}"; do
+        unset "$_var" 2>/dev/null || true
+    done
+    # SSH_* vars (same set collected during backend_prepare)
+    while IFS='=' read -r _name _; do
+        [[ "$_name" == SSH_* ]] && unset "$_name" 2>/dev/null || true
+    done < <(env)
+
     exec "$BWRAP" "${BWRAP_ARGS[@]}" -- "$@"
 }
 
