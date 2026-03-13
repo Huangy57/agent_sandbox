@@ -646,6 +646,38 @@ print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
     else
         skip "Could not test userfaultfd"
     fi
+
+    # Verify the seccomp filter is what blocks io_uring — not something else.
+    # Temporarily hide generate-seccomp.py so bwrap runs without a filter,
+    # then confirm io_uring_setup returns EFAULT (reachable) not EPERM (blocked).
+    if is_bwrap; then
+        local _seccomp_py="$SCRIPT_DIR/backends/generate-seccomp.py"
+        local _seccomp_bak="${_seccomp_py}.test-bak-$$"
+        if [[ -f "$_seccomp_py" ]]; then
+            mv "$_seccomp_py" "$_seccomp_bak"
+            if sandbox python3 -c "
+import ctypes, ctypes.util
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+ret = libc.syscall(ctypes.c_long(425), ctypes.c_uint32(1), ctypes.c_void_p(0))
+e = ctypes.get_errno()
+print(f'ERRNO={e}')
+" 2>&1; then
+                mv "$_seccomp_bak" "$_seccomp_py"
+                local _no_filter_errno
+                _no_filter_errno=$(echo "$OUTPUT" | grep -oP 'ERRNO=\K[0-9]+' || echo "")
+                if [[ "$_no_filter_errno" != "1" ]]; then
+                    pass "io_uring_setup reachable without seccomp filter (errno=$_no_filter_errno), blocked with it (EPERM)"
+                else
+                    fail "io_uring_setup returns EPERM even without seccomp filter — something else blocks it"
+                fi
+            else
+                mv "$_seccomp_bak" "$_seccomp_py"
+                skip "Could not run without-filter test"
+            fi
+        else
+            skip "generate-seccomp.py not found"
+        fi
+    fi
 fi
 
 # ── 9. Security hardening (advanced) ──────────────────────────────
