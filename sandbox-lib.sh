@@ -125,7 +125,9 @@ BIND_DEV_PTS=false
 
 # Backend selection. Empty means auto-detect (bwrap > firejail > landlock).
 # Can be overridden by --backend flag, SANDBOX_BACKEND env, or config file.
-SANDBOX_BACKEND=""
+# Preserve any value from env/CLI before setting the default — the override
+# is restored after config loading (see _SANDBOX_BACKEND_OVERRIDE below).
+SANDBOX_BACKEND="${SANDBOX_BACKEND:-}"
 
 # Path to the Slurm bypass token file. bwrap/firejail hide it inside
 # the sandbox. Can be set as SANDBOX_BYPASS_TOKEN or TOKEN_FILE (the
