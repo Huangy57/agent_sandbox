@@ -480,33 +480,9 @@ else
     rm -rf "$PROTECTION_PROJECT"
 fi
 
-# ── 8. Security hardening ─────────────────────────────────────────
+# ── 8. Escape vectors ─────────────────────────────────────────────
 
-echo "8. Security hardening (attack vectors)"
-
-# SSH env vars should not leak
-export SSH_AUTH_SOCK="/tmp/ssh-test/agent.123"
-export SSH_CONNECTION="1.2.3.4 1234 5.6.7.8 22"
-export SSH_CLIENT="1.2.3.4 1234 22"
-export SSH_TTY="/dev/pts/99"
-
-if sandbox bash -c 'echo ${SSH_AUTH_SOCK:-UNSET}'; then
-    if [[ "$OUTPUT" == "UNSET" ]]; then
-        pass "SSH_AUTH_SOCK is blocked"
-    else
-        fail "SSH_AUTH_SOCK leaked into sandbox" "$OUTPUT"
-    fi
-fi
-
-if sandbox bash -c 'echo ${SSH_CONNECTION:-UNSET}'; then
-    if [[ "$OUTPUT" == "UNSET" ]]; then
-        pass "SSH_CONNECTION is blocked"
-    else
-        fail "SSH_CONNECTION leaked into sandbox" "$OUTPUT"
-    fi
-fi
-
-unset SSH_AUTH_SOCK SSH_CONNECTION SSH_CLIENT SSH_TTY
+echo "8. Escape vectors"
 
 # systemd-run escape — should fail on bwrap (sockets not visible)
 if command -v systemd-run &>/dev/null; then
@@ -543,407 +519,6 @@ if command -v systemd-run &>/dev/null; then
 else
     skip "systemd-run not available — escape test"
 fi
-
-# /run/user and /run/dbus should not be accessible
-# bwrap: tmpfs /run hides everything; firejail: blacklisted explicitly
-if has_mount_ns; then
-    if sandbox bash -c "ls /run/user/ 2>&1"; then
-        fail "/run/user/ is visible in sandbox"
-    else
-        pass "/run/user/ is hidden"
-    fi
-
-    if sandbox bash -c "ls /run/dbus/ 2>&1"; then
-        fail "/run/dbus/ is visible in sandbox"
-    else
-        pass "/run/dbus/ is hidden"
-    fi
-fi
-
-# PID namespace isolation (bwrap and firejail — landlock does not have PID ns)
-if has_mount_ns; then
-    if sandbox bash -c 'ps aux 2>/dev/null | wc -l'; then
-        PROC_COUNT=$(echo "$OUTPUT" | tail -1 | tr -d '[:space:]')
-        # Inside a PID namespace, we should see very few processes
-        # (bwrap/firejail, bash, ps, wc — typically < 10)
-        if [[ "$PROC_COUNT" =~ ^[0-9]+$ ]] && [[ "$PROC_COUNT" -lt 20 ]]; then
-            pass "PID namespace isolates host processes ($PROC_COUNT visible)"
-        else
-            fail "PID namespace not working — $PROC_COUNT processes visible"
-        fi
-    else
-        skip "Could not check PID namespace"
-    fi
-fi
-
-# Seccomp filter (landlock and firejail — bwrap doesn't install one currently)
-if is_landlock || is_firejail || is_bwrap; then
-    if sandbox bash -c 'grep "^Seccomp:" /proc/self/status'; then
-        SECCOMP_MODE=$(echo "$OUTPUT" | grep '^Seccomp:' | awk '{print $2}')
-        if [[ "$SECCOMP_MODE" == "2" ]]; then
-            pass "Seccomp filter is active (mode 2)"
-        else
-            fail "Seccomp filter not active (mode $SECCOMP_MODE)"
-        fi
-    fi
-
-    # kexec_load should be blocked by all seccomp-enabled backends
-    # syscall numbers: x86_64=246, aarch64=104
-    if sandbox python3 -c "
-import ctypes, ctypes.util, platform
-libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
-nr = 246 if platform.machine() == 'x86_64' else 104
-ret = libc.syscall(ctypes.c_long(nr), 0, 0, 0, 0)
-print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
-" 2>&1; then
-        if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
-            pass "kexec_load blocked by seccomp"
-        else
-            fail "kexec_load not blocked by seccomp" "$OUTPUT"
-        fi
-    else
-        skip "Could not test kexec_load"
-    fi
-
-    # io_uring_setup — blocked by landlock's custom seccomp and firejail's
-    # --seccomp.drop. Note: firejail 0.9.72 seccomp is broken on aarch64
-    # (filter loads but doesn't block); works on x86_64.
-    # syscall number: 425 (same on x86_64 and aarch64)
-    if sandbox python3 -c "
-import ctypes, ctypes.util
-libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
-ret = libc.syscall(ctypes.c_long(425), ctypes.c_uint32(1), ctypes.c_void_p(0))
-print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
-" 2>&1; then
-        if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
-            pass "io_uring_setup blocked by seccomp"
-        elif is_firejail && [[ "$(uname -m)" == "aarch64" ]]; then
-            skip "io_uring_setup — firejail seccomp broken on aarch64 (works on x86_64)"
-        else
-            fail "io_uring_setup not blocked by seccomp" "$OUTPUT"
-        fi
-    else
-        skip "Could not test io_uring_setup"
-    fi
-
-    # userfaultfd — blocked by landlock's custom seccomp and firejail's
-    # --seccomp.drop. Exploitation primitive for kernel race conditions.
-    # syscall numbers: x86_64=323, aarch64=282
-    if sandbox python3 -c "
-import ctypes, ctypes.util, platform
-libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
-nr = 323 if platform.machine() == 'x86_64' else 282
-ret = libc.syscall(ctypes.c_long(nr), ctypes.c_int(0))
-print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
-" 2>&1; then
-        if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
-            pass "userfaultfd blocked by seccomp"
-        elif is_firejail && [[ "$(uname -m)" == "aarch64" ]]; then
-            skip "userfaultfd — firejail seccomp broken on aarch64 (works on x86_64)"
-        else
-            fail "userfaultfd not blocked by seccomp" "$OUTPUT"
-        fi
-    else
-        skip "Could not test userfaultfd"
-    fi
-
-    # Verify the seccomp filter is what blocks io_uring — not something else.
-    # Temporarily hide generate-seccomp.py so bwrap runs without a filter,
-    # then confirm io_uring_setup returns EFAULT (reachable) not EPERM (blocked).
-    if is_bwrap; then
-        local _seccomp_py="$SCRIPT_DIR/backends/generate-seccomp.py"
-        local _seccomp_bak="${_seccomp_py}.test-bak-$$"
-        if [[ -f "$_seccomp_py" ]]; then
-            mv "$_seccomp_py" "$_seccomp_bak"
-            if sandbox python3 -c "
-import ctypes, ctypes.util
-libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
-ret = libc.syscall(ctypes.c_long(425), ctypes.c_uint32(1), ctypes.c_void_p(0))
-e = ctypes.get_errno()
-print(f'ERRNO={e}')
-" 2>&1; then
-                mv "$_seccomp_bak" "$_seccomp_py"
-                local _no_filter_errno
-                _no_filter_errno=$(echo "$OUTPUT" | grep -oP 'ERRNO=\K[0-9]+' || echo "")
-                if [[ "$_no_filter_errno" != "1" ]]; then
-                    pass "io_uring_setup reachable without seccomp filter (errno=$_no_filter_errno), blocked with it (EPERM)"
-                else
-                    fail "io_uring_setup returns EPERM even without seccomp filter — something else blocks it"
-                fi
-            else
-                mv "$_seccomp_bak" "$_seccomp_py"
-                skip "Could not run without-filter test"
-            fi
-        else
-            skip "generate-seccomp.py not found"
-        fi
-    fi
-fi
-
-# ── 9. Security hardening (advanced) ──────────────────────────────
-
-echo "9. Advanced hardening"
-
-# /tmp isolation — bwrap uses --tmpfs /tmp, firejail uses --private-tmp (configurable)
-# Landlock does not isolate /tmp
-if has_mount_ns; then
-    # Create a marker file in host /tmp, check it's not visible inside sandbox
-    _TMP_MARKER="/tmp/.sandbox-test-marker-$$"
-    touch "$_TMP_MARKER"
-    if sandbox bash -c "test -f '$_TMP_MARKER' && echo VISIBLE || echo HIDDEN"; then
-        if [[ "$OUTPUT" == "HIDDEN" ]]; then
-            pass "/tmp is isolated from host"
-        else
-            # Firejail: PRIVATE_TMP=false disables /tmp isolation (for MPI/NCCL)
-            if is_firejail; then
-                pass "/tmp is shared (PRIVATE_TMP=false — MPI/NCCL compatible)"
-            else
-                fail "/tmp is shared with host (should be isolated)"
-            fi
-        fi
-    fi
-    rm -f "$_TMP_MARKER"
-else
-    skip "/tmp isolation — Landlock has no mount namespace"
-fi
-
-# tmux: outer socket blocked, wrapper uses sandbox config for nesting
-_tmux_sock="/tmp/tmux-$(id -u)"
-if [[ -d "$_tmux_sock" ]] && has_mount_ns; then
-    if sandbox bash -c "test -d '$_tmux_sock' && echo VISIBLE || echo HIDDEN"; then
-        if [[ "$OUTPUT" == "HIDDEN" ]]; then
-            pass "tmux outer socket blocked (prevents escape via tmux server)"
-        else
-            fail "tmux outer socket exposed (sandbox escape risk)" "$OUTPUT"
-        fi
-    fi
-elif [[ ! -d "$_tmux_sock" ]]; then
-    skip "tmux outer socket — no tmux session running"
-fi
-
-# tmux wrapper uses sandbox-tmux.conf (Ctrl-a prefix for nesting)
-if sandbox bash -c 'which tmux 2>/dev/null'; then
-    if [[ "$OUTPUT" == *"bin/tmux" && "$OUTPUT" != "/usr/bin/tmux" ]]; then
-        pass "tmux shadows /usr/bin/tmux via sandbox bin/"
-    else
-        fail "tmux not shadowed by sandbox wrapper" "$OUTPUT"
-    fi
-fi
-if [[ -f "$SCRIPT_DIR/sandbox-tmux.conf" ]]; then
-    pass "sandbox-tmux.conf present"
-else
-    fail "sandbox-tmux.conf missing"
-fi
-
-# pty allocation and tmux (requires BIND_DEV_PTS=true on kernels < 5.4)
-if sandbox bash -c 'python3 -c "import pty; pty.openpty(); print(\"pty-ok\")" 2>&1'; then
-    if [[ "$OUTPUT" == *"pty-ok"* ]]; then
-        pass "pty allocation works inside sandbox"
-    else
-        fail "pty allocation returned unexpected output" "$OUTPUT"
-    fi
-    # tmux test only makes sense if ptys work
-    sandbox bash -c 'tmux new-session -d -s sandbox-test sleep\ 5 && tmux list-sessions && tmux kill-server' || true
-    # Check output, not exit code — firejail sends SIGHUP on cleanup (exit 129)
-    if [[ "$OUTPUT" == *"sandbox-test"* ]]; then
-        pass "tmux starts detached session inside sandbox"
-    else
-        fail "tmux failed to start inside sandbox" "$OUTPUT"
-    fi
-else
-    skip "pty allocation failed (set BIND_DEV_PTS=true for tmux on kernels < 5.4)"
-fi
-
-# Snapd socket should be blocked (bwrap: tmpfs /run; firejail: blacklisted)
-if [[ -e /run/snapd.socket ]]; then
-    if has_mount_ns; then
-        if sandbox bash -c "python3 -c \"
-import socket
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-try:
-    s.connect('/run/snapd.socket')
-    print('ACCESSIBLE')
-except (ConnectionRefusedError, FileNotFoundError, PermissionError, OSError):
-    print('BLOCKED')
-\" 2>/dev/null"; then
-            if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
-                pass "Snapd socket is blocked"
-            else
-                fail "Snapd socket is accessible inside sandbox"
-            fi
-        fi
-    fi
-else
-    skip "Snapd socket not present on host"
-fi
-
-# systemd-notify socket should be blocked (bwrap: tmpfs /run; firejail: blacklisted)
-if [[ -e /run/systemd/notify ]]; then
-    if has_mount_ns; then
-        if sandbox bash -c "python3 -c \"
-import socket
-s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-try:
-    s.connect('/run/systemd/notify')
-    print('ACCESSIBLE')
-except (ConnectionRefusedError, FileNotFoundError, PermissionError, OSError):
-    print('BLOCKED')
-\" 2>/dev/null"; then
-            if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
-                pass "systemd-notify socket is blocked"
-            else
-                fail "systemd-notify socket is accessible inside sandbox"
-            fi
-        fi
-    fi
-else
-    skip "systemd-notify socket not present on host"
-fi
-
-# Non-blocked env vars should pass through to the sandbox
-export _TEST_CRED_VAR="test-credential-value"
-if sandbox bash -c 'echo ${LANG:-UNSET}'; then
-    if [[ "$OUTPUT" != "UNSET" ]]; then
-        pass "Passthrough env vars (LANG) accessible"
-    else
-        # LANG may not be set on all systems
-        skip "LANG not set — passthrough test inconclusive"
-    fi
-fi
-unset _TEST_CRED_VAR
-
-# FILTER_PASSWD — verify /etc/passwd is filtered inside sandbox
-if is_bwrap; then
-    if sandbox bash -c 'wc -l < /etc/passwd'; then
-        _host_count=$(wc -l < /etc/passwd)
-        _sandbox_count="$OUTPUT"
-        if [[ "$_sandbox_count" -lt "$_host_count" ]]; then
-            pass "FILTER_PASSWD: /etc/passwd filtered (host: $_host_count → sandbox: $_sandbox_count lines)"
-        elif [[ "$_sandbox_count" -eq "$_host_count" ]]; then
-            # Could be that all users are system users (< 1000)
-            pass "FILTER_PASSWD: /etc/passwd overlaid (same count — all UIDs may be < 1000)"
-        fi
-    fi
-    # Slurm service users must be present (sbatch needs to resolve SlurmUser)
-    if sandbox bash -c 'grep -c "^slurm:" /etc/passwd'; then
-        pass "FILTER_PASSWD: slurm user preserved in filtered passwd"
-    else
-        fail "FILTER_PASSWD: slurm user missing from filtered passwd" "$OUTPUT"
-    fi
-    if sandbox bash -c 'grep "^passwd:" /etc/nsswitch.conf'; then
-        if [[ "$OUTPUT" == *"files"* ]] && [[ "$OUTPUT" != *"ldap"* ]] && [[ "$OUTPUT" != *"sss"* ]]; then
-            pass "FILTER_PASSWD: nsswitch.conf uses files-only for passwd"
-        else
-            fail "FILTER_PASSWD: nsswitch.conf still references ldap/sss" "$OUTPUT"
-        fi
-    fi
-elif is_firejail; then
-    # Firejail: check that LDAP users are not enumerable
-    _host_getent=$(getent passwd | wc -l)
-    if sandbox bash -c 'getent passwd | wc -l'; then
-        _sandbox_getent="$OUTPUT"
-        if [[ "$_sandbox_getent" -lt "$_host_getent" ]]; then
-            pass "FILTER_PASSWD: getent filtered (host: $_host_getent → sandbox: $_sandbox_getent)"
-        elif [[ "$_sandbox_getent" -eq "$_host_getent" ]]; then
-            # No LDAP configured — nothing to filter
-            skip "FILTER_PASSWD: no LDAP users to filter (host and sandbox both $_host_getent)"
-        fi
-    fi
-else
-    skip "FILTER_PASSWD: not supported on Landlock (no mount namespace)"
-fi
-
-# NoNewPrivs is set (prevents setuid escalation inside sandbox)
-if sandbox bash -c 'grep "^NoNewPrivs:" /proc/self/status | awk "{print \$2}"'; then
-    if [[ "$OUTPUT" == "1" ]]; then
-        pass "NoNewPrivs is set (prevents setuid escalation)"
-    else
-        # bwrap may not set nonewprivs by default
-        if is_bwrap; then
-            skip "NoNewPrivs not set by bwrap (optional)"
-        else
-            fail "NoNewPrivs not set (should be 1)" "$OUTPUT"
-        fi
-    fi
-fi
-
-# Capabilities are dropped (firejail: --caps.drop=all, bwrap: --cap-drop ALL)
-if is_firejail; then
-    if sandbox bash -c 'grep "^CapEff:" /proc/self/status | awk "{print \$2}"'; then
-        if [[ "$OUTPUT" == "0000000000000000" ]]; then
-            pass "All capabilities dropped"
-        else
-            fail "Capabilities not fully dropped: $OUTPUT"
-        fi
-    fi
-fi
-
-# SANDBOX_BYPASS_TOKEN — verify the token file is hidden inside the sandbox
-# bwrap overlays with /dev/null; firejail blacklists; landlock relies on eBPF LSM
-if has_mount_ns; then
-    # Mount-namespace backends: test with a temp token file
-    _TOKEN_FILE="/tmp/.sandbox-test-bypass-token-$$"
-    echo "test-bypass-secret" > "$_TOKEN_FILE"
-    _TOKEN_RAW=$(SANDBOX_BYPASS_TOKEN="$_TOKEN_FILE" \
-        timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
-        --project-dir "$PROJECT_DIR" -- cat "$_TOKEN_FILE" 2>&1) || true
-    _TOKEN_OUT=$(echo "$_TOKEN_RAW" | grep -v \
-        -e '^Warning:' -e '^Parent pid' -e '^Child process' -e '^Parent is shutting')
-    if echo "$_TOKEN_OUT" | grep -q "test-bypass-secret"; then
-        fail "SANDBOX_BYPASS_TOKEN is readable inside sandbox"
-    else
-        pass "SANDBOX_BYPASS_TOKEN is hidden inside sandbox"
-    fi
-    rm -f "$_TOKEN_FILE"
-else
-    # Landlock: cannot hide files via mount namespace. Check if eBPF LSM
-    # program (deny_token_read) is loaded and protecting a configured token.
-    _EBPF_LOADED=false
-    if command -v bpftool &>/dev/null; then
-        if sudo -n bpftool prog list 2>/dev/null | grep -q 'deny_token_read'; then
-            _EBPF_LOADED=true
-        fi
-    fi
-
-    if [[ "$_EBPF_LOADED" == "true" ]]; then
-        # eBPF is loaded — find the configured token path and test it
-        # Try sandbox.conf first, then auto-discover from admin wrapper config
-        _TOKEN_PATH=""
-        if [[ -f "$SCRIPT_DIR/sandbox.conf" ]]; then
-            _TOKEN_PATH=$(bash -c "source '$SCRIPT_DIR/sandbox.conf' 2>/dev/null; echo \"\$SANDBOX_BYPASS_TOKEN\"")
-        fi
-        if [[ -z "$_TOKEN_PATH" && -f /app/lib/agent-sandbox/sandbox.conf ]]; then
-            _TOKEN_PATH=$(bash -c 'source /app/lib/agent-sandbox/sandbox.conf 2>/dev/null; echo "$TOKEN_FILE"')
-        fi
-        if [[ -n "$_TOKEN_PATH" && -f "$_TOKEN_PATH" ]]; then
-            # Landlock sets NO_NEW_PRIVS — eBPF should deny the read
-            if sandbox cat "$_TOKEN_PATH" 2>&1; then
-                # eBPF is loaded but not blocking. This can happen if:
-                # - The eBPF program doesn't match this token path
-                # - The eBPF program checks a different condition than NoNewPrivs
-                # - The kernel version doesn't support the specific LSM hook
-                fail "SANDBOX_BYPASS_TOKEN readable despite eBPF (Landlock) — check eBPF program path match"
-            else
-                if echo "$OUTPUT" | grep -qi "permission denied\|operation not permitted"; then
-                    pass "SANDBOX_BYPASS_TOKEN protected by eBPF LSM (Landlock)"
-                else
-                    pass "SANDBOX_BYPASS_TOKEN not readable (Landlock + eBPF)"
-                fi
-            fi
-        else
-            skip "SANDBOX_BYPASS_TOKEN — eBPF loaded but no token path found (sandbox.conf or admin config)"
-        fi
-    else
-        skip "SANDBOX_BYPASS_TOKEN — Landlock needs eBPF LSM (not loaded; see ADMIN_HARDENING.md §1)"
-    fi
-fi
-
-echo ""
-
-# ── 10. Advanced security (escape vectors) ───────────────────────
-
-echo "10. Advanced security (escape vectors)"
-
 # ── S01: Symlink to /etc/shadow from project dir ──
 local _link="$PROJECT_DIR/.test-shadow-link-$$"
 ln -snf /etc/shadow "$_link" 2>/dev/null
@@ -1149,56 +724,6 @@ else
     fi
 fi
 
-# ── F01: Verify FDs > 2 are closed inside sandbox ──
-if sandbox bash -c '
-    open_fds=""
-    for fd_num in $(ls /proc/self/fd 2>/dev/null); do
-        if [[ "$fd_num" -gt 2 ]] 2>/dev/null && [[ "$fd_num" -ne 255 ]]; then
-            target=$(readlink "/proc/self/fd/$fd_num" 2>/dev/null || echo "unknown")
-            case "$target" in
-                pipe:*|socket:*|anon_inode:*|/dev/null|unknown) continue ;;
-            esac
-            open_fds="$open_fds $fd_num:$target"
-        fi
-    done
-    if [[ -z "$open_fds" ]]; then
-        echo "CLEAN"
-    else
-        echo "LEAKED:$open_fds"
-    fi
-'; then
-    if echo "$OUTPUT" | grep -q "CLEAN"; then
-        pass "F01: No unexpected FDs > 2 inherited into sandbox"
-    elif echo "$OUTPUT" | grep -q "LEAKED"; then
-        fail "F01: Leaked FDs found inside sandbox" "$OUTPUT"
-    else
-        pass "F01: FD check completed (no leaks detected)"
-    fi
-else
-    fail "F01: FD inheritance check command failed" "$OUTPUT"
-fi
-
-# ── G01: Signal processes outside PID namespace ──
-if has_mount_ns; then
-    local _host_pid=$$
-    if sandbox bash -c "
-        kill -0 $_host_pid 2>&1
-        echo EXIT=\$?
-    "; then
-        if echo "$OUTPUT" | grep -qE "No such process|EXIT=[1-9]|not permitted"; then
-            pass "G01: Cannot signal host process from inside PID namespace"
-        elif echo "$OUTPUT" | grep -q "EXIT=0"; then
-            fail "G01: kill -0 succeeded on host PID $_host_pid (PID namespace leak)" "$OUTPUT"
-        else
-            pass "G01: Signal to host process blocked"
-        fi
-    else
-        pass "G01: Signal attack failed (good)"
-    fi
-else
-    skip "G01: No PID namespace isolation ($CURRENT_BACKEND backend)"
-fi
-
 # ── K01: TIOCSTI ioctl blocked or /dev/pts isolated ──
 # Test on a sandbox-owned pty (not stdin) to avoid injecting keystrokes
 # into the host terminal.
@@ -1255,38 +780,139 @@ else
     pass "K01: TIOCSTI test command failed (sandbox blocked)"
 fi
 
-# ── C01: Write to cgroup filesystem ──
-if sandbox bash -c '
-    wrote=false
-    for cg in /sys/fs/cgroup/memory/memory.limit_in_bytes \
-              /sys/fs/cgroup/cpu/cpu.cfs_quota_us \
-              /sys/fs/cgroup/unified/cgroup.procs \
-              /sys/fs/cgroup/cgroup.procs; do
-        if [[ -w "$cg" ]] 2>/dev/null; then
-            echo "WRITABLE:$cg"
-            wrote=true
+echo ""
+
+# ── 9. Syscall & privilege restrictions ───────────────────────────
+
+echo "9. Syscall & privilege restrictions"
+
+# Seccomp filter (landlock and firejail — bwrap doesn't install one currently)
+if is_landlock || is_firejail || is_bwrap; then
+    if sandbox bash -c 'grep "^Seccomp:" /proc/self/status'; then
+        SECCOMP_MODE=$(echo "$OUTPUT" | grep '^Seccomp:' | awk '{print $2}')
+        if [[ "$SECCOMP_MODE" == "2" ]]; then
+            pass "Seccomp filter is active (mode 2)"
+        else
+            fail "Seccomp filter not active (mode $SECCOMP_MODE)"
         fi
-    done
-    for cgdir in /sys/fs/cgroup/memory /sys/fs/cgroup/cpu /sys/fs/cgroup/unified /sys/fs/cgroup; do
-        if mkdir "$cgdir/escape-test-$$" 2>/dev/null; then
-            echo "MKDIR_OK:$cgdir/escape-test-$$"
-            rmdir "$cgdir/escape-test-$$" 2>/dev/null
-            wrote=true
-        fi
-    done
-    if ! $wrote; then
-        echo "CGROUP_READONLY"
     fi
-'; then
-    if echo "$OUTPUT" | grep -q "CGROUP_READONLY"; then
-        pass "C01: Cgroup filesystem is read-only inside sandbox"
-    elif echo "$OUTPUT" | grep -q "WRITABLE\|MKDIR_OK"; then
-        fail "C01: Cgroup filesystem writable inside sandbox" "$OUTPUT"
+
+    # kexec_load should be blocked by all seccomp-enabled backends
+    # syscall numbers: x86_64=246, aarch64=104
+    if sandbox python3 -c "
+import ctypes, ctypes.util, platform
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+nr = 246 if platform.machine() == 'x86_64' else 104
+ret = libc.syscall(ctypes.c_long(nr), 0, 0, 0, 0)
+print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
+" 2>&1; then
+        if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+            pass "kexec_load blocked by seccomp"
+        else
+            fail "kexec_load not blocked by seccomp" "$OUTPUT"
+        fi
     else
-        pass "C01: Cgroup access restricted"
+        skip "Could not test kexec_load"
     fi
-else
-    pass "C01: Cgroup test failed (sandbox restriction)"
+
+    # io_uring_setup — blocked by landlock's custom seccomp and firejail's
+    # --seccomp.drop. Note: firejail 0.9.72 seccomp is broken on aarch64
+    # (filter loads but doesn't block); works on x86_64.
+    # syscall number: 425 (same on x86_64 and aarch64)
+    if sandbox python3 -c "
+import ctypes, ctypes.util
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+ret = libc.syscall(ctypes.c_long(425), ctypes.c_uint32(1), ctypes.c_void_p(0))
+print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
+" 2>&1; then
+        if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+            pass "io_uring_setup blocked by seccomp"
+        elif is_firejail && [[ "$(uname -m)" == "aarch64" ]]; then
+            skip "io_uring_setup — firejail seccomp broken on aarch64 (works on x86_64)"
+        else
+            fail "io_uring_setup not blocked by seccomp" "$OUTPUT"
+        fi
+    else
+        skip "Could not test io_uring_setup"
+    fi
+
+    # userfaultfd — blocked by landlock's custom seccomp and firejail's
+    # --seccomp.drop. Exploitation primitive for kernel race conditions.
+    # syscall numbers: x86_64=323, aarch64=282
+    if sandbox python3 -c "
+import ctypes, ctypes.util, platform
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+nr = 323 if platform.machine() == 'x86_64' else 282
+ret = libc.syscall(ctypes.c_long(nr), ctypes.c_int(0))
+print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
+" 2>&1; then
+        if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+            pass "userfaultfd blocked by seccomp"
+        elif is_firejail && [[ "$(uname -m)" == "aarch64" ]]; then
+            skip "userfaultfd — firejail seccomp broken on aarch64 (works on x86_64)"
+        else
+            fail "userfaultfd not blocked by seccomp" "$OUTPUT"
+        fi
+    else
+        skip "Could not test userfaultfd"
+    fi
+
+    # Verify the seccomp filter is what blocks io_uring — not something else.
+    # Temporarily hide generate-seccomp.py so bwrap runs without a filter,
+    # then confirm io_uring_setup returns EFAULT (reachable) not EPERM (blocked).
+    if is_bwrap; then
+        local _seccomp_py="$SCRIPT_DIR/backends/generate-seccomp.py"
+        local _seccomp_bak="${_seccomp_py}.test-bak-$$"
+        if [[ -f "$_seccomp_py" ]]; then
+            mv "$_seccomp_py" "$_seccomp_bak"
+            if sandbox python3 -c "
+import ctypes, ctypes.util
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+ret = libc.syscall(ctypes.c_long(425), ctypes.c_uint32(1), ctypes.c_void_p(0))
+e = ctypes.get_errno()
+print(f'ERRNO={e}')
+" 2>&1; then
+                mv "$_seccomp_bak" "$_seccomp_py"
+                local _no_filter_errno
+                _no_filter_errno=$(echo "$OUTPUT" | grep -oP 'ERRNO=\K[0-9]+' || echo "")
+                if [[ "$_no_filter_errno" != "1" ]]; then
+                    pass "io_uring_setup reachable without seccomp filter (errno=$_no_filter_errno), blocked with it (EPERM)"
+                else
+                    fail "io_uring_setup returns EPERM even without seccomp filter — something else blocks it"
+                fi
+            else
+                mv "$_seccomp_bak" "$_seccomp_py"
+                skip "Could not run without-filter test"
+            fi
+        else
+            skip "generate-seccomp.py not found"
+        fi
+    fi
+fi
+
+# NoNewPrivs is set (prevents setuid escalation inside sandbox)
+if sandbox bash -c 'grep "^NoNewPrivs:" /proc/self/status | awk "{print \$2}"'; then
+    if [[ "$OUTPUT" == "1" ]]; then
+        pass "NoNewPrivs is set (prevents setuid escalation)"
+    else
+        # bwrap may not set nonewprivs by default
+        if is_bwrap; then
+            skip "NoNewPrivs not set by bwrap (optional)"
+        else
+            fail "NoNewPrivs not set (should be 1)" "$OUTPUT"
+        fi
+    fi
+fi
+
+# Capabilities are dropped (firejail: --caps.drop=all, bwrap: --cap-drop ALL)
+if is_firejail; then
+    if sandbox bash -c 'grep "^CapEff:" /proc/self/status | awk "{print \$2}"'; then
+        if [[ "$OUTPUT" == "0000000000000000" ]]; then
+            pass "All capabilities dropped"
+        else
+            fail "Capabilities not fully dropped: $OUTPUT"
+        fi
+    fi
 fi
 
 # ── U01: Create new user namespace to gain capabilities ──
@@ -1324,6 +950,393 @@ if sandbox bash -c '
 else
     pass "U01: User namespace creation attempt failed (good)"
 fi
+
+echo ""
+
+# ── 10. Resource & IPC isolation ──────────────────────────────────
+
+echo "10. Resource & IPC isolation"
+
+# PID namespace isolation (bwrap and firejail — landlock does not have PID ns)
+if has_mount_ns; then
+    if sandbox bash -c 'ps aux 2>/dev/null | wc -l'; then
+        PROC_COUNT=$(echo "$OUTPUT" | tail -1 | tr -d '[:space:]')
+        # Inside a PID namespace, we should see very few processes
+        # (bwrap/firejail, bash, ps, wc — typically < 10)
+        if [[ "$PROC_COUNT" =~ ^[0-9]+$ ]] && [[ "$PROC_COUNT" -lt 20 ]]; then
+            pass "PID namespace isolates host processes ($PROC_COUNT visible)"
+        else
+            fail "PID namespace not working — $PROC_COUNT processes visible"
+        fi
+    else
+        skip "Could not check PID namespace"
+    fi
+fi
+
+# /tmp isolation — bwrap uses --tmpfs /tmp, firejail uses --private-tmp (configurable)
+# Landlock does not isolate /tmp
+if has_mount_ns; then
+    # Create a marker file in host /tmp, check it's not visible inside sandbox
+    _TMP_MARKER="/tmp/.sandbox-test-marker-$$"
+    touch "$_TMP_MARKER"
+    if sandbox bash -c "test -f '$_TMP_MARKER' && echo VISIBLE || echo HIDDEN"; then
+        if [[ "$OUTPUT" == "HIDDEN" ]]; then
+            pass "/tmp is isolated from host"
+        else
+            # Firejail: PRIVATE_TMP=false disables /tmp isolation (for MPI/NCCL)
+            if is_firejail; then
+                pass "/tmp is shared (PRIVATE_TMP=false — MPI/NCCL compatible)"
+            else
+                fail "/tmp is shared with host (should be isolated)"
+            fi
+        fi
+    fi
+    rm -f "$_TMP_MARKER"
+else
+    skip "/tmp isolation — Landlock has no mount namespace"
+fi
+
+# /run/user and /run/dbus should not be accessible
+# bwrap: tmpfs /run hides everything; firejail: blacklisted explicitly
+if has_mount_ns; then
+    if sandbox bash -c "ls /run/user/ 2>&1"; then
+        fail "/run/user/ is visible in sandbox"
+    else
+        pass "/run/user/ is hidden"
+    fi
+
+    if sandbox bash -c "ls /run/dbus/ 2>&1"; then
+        fail "/run/dbus/ is visible in sandbox"
+    else
+        pass "/run/dbus/ is hidden"
+    fi
+fi
+
+# Snapd socket should be blocked (bwrap: tmpfs /run; firejail: blacklisted)
+if [[ -e /run/snapd.socket ]]; then
+    if has_mount_ns; then
+        if sandbox bash -c "python3 -c \"
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('/run/snapd.socket')
+    print('ACCESSIBLE')
+except (ConnectionRefusedError, FileNotFoundError, PermissionError, OSError):
+    print('BLOCKED')
+\" 2>/dev/null"; then
+            if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+                pass "Snapd socket is blocked"
+            else
+                fail "Snapd socket is accessible inside sandbox"
+            fi
+        fi
+    fi
+else
+    skip "Snapd socket not present on host"
+fi
+
+# systemd-notify socket should be blocked (bwrap: tmpfs /run; firejail: blacklisted)
+if [[ -e /run/systemd/notify ]]; then
+    if has_mount_ns; then
+        if sandbox bash -c "python3 -c \"
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+try:
+    s.connect('/run/systemd/notify')
+    print('ACCESSIBLE')
+except (ConnectionRefusedError, FileNotFoundError, PermissionError, OSError):
+    print('BLOCKED')
+\" 2>/dev/null"; then
+            if [[ "$OUTPUT" == *"BLOCKED"* ]]; then
+                pass "systemd-notify socket is blocked"
+            else
+                fail "systemd-notify socket is accessible inside sandbox"
+            fi
+        fi
+    fi
+else
+    skip "systemd-notify socket not present on host"
+fi
+
+# tmux: outer socket blocked, wrapper uses sandbox config for nesting
+_tmux_sock="/tmp/tmux-$(id -u)"
+if [[ -d "$_tmux_sock" ]] && has_mount_ns; then
+    if sandbox bash -c "test -d '$_tmux_sock' && echo VISIBLE || echo HIDDEN"; then
+        if [[ "$OUTPUT" == "HIDDEN" ]]; then
+            pass "tmux outer socket blocked (prevents escape via tmux server)"
+        else
+            fail "tmux outer socket exposed (sandbox escape risk)" "$OUTPUT"
+        fi
+    fi
+elif [[ ! -d "$_tmux_sock" ]]; then
+    skip "tmux outer socket — no tmux session running"
+fi
+
+# tmux wrapper uses sandbox-tmux.conf (Ctrl-a prefix for nesting)
+if sandbox bash -c 'which tmux 2>/dev/null'; then
+    if [[ "$OUTPUT" == *"bin/tmux" && "$OUTPUT" != "/usr/bin/tmux" ]]; then
+        pass "tmux shadows /usr/bin/tmux via sandbox bin/"
+    else
+        fail "tmux not shadowed by sandbox wrapper" "$OUTPUT"
+    fi
+fi
+if [[ -f "$SCRIPT_DIR/sandbox-tmux.conf" ]]; then
+    pass "sandbox-tmux.conf present"
+else
+    fail "sandbox-tmux.conf missing"
+fi
+
+# pty allocation and tmux (requires BIND_DEV_PTS=true on kernels < 5.4)
+if sandbox bash -c 'python3 -c "import pty; pty.openpty(); print(\"pty-ok\")" 2>&1'; then
+    if [[ "$OUTPUT" == *"pty-ok"* ]]; then
+        pass "pty allocation works inside sandbox"
+    else
+        fail "pty allocation returned unexpected output" "$OUTPUT"
+    fi
+    # tmux test only makes sense if ptys work
+    sandbox bash -c 'tmux new-session -d -s sandbox-test sleep\ 5 && tmux list-sessions && tmux kill-server' || true
+    # Check output, not exit code — firejail sends SIGHUP on cleanup (exit 129)
+    if [[ "$OUTPUT" == *"sandbox-test"* ]]; then
+        pass "tmux starts detached session inside sandbox"
+    else
+        fail "tmux failed to start inside sandbox" "$OUTPUT"
+    fi
+else
+    skip "pty allocation failed (set BIND_DEV_PTS=true for tmux on kernels < 5.4)"
+fi
+
+# ── C01: Write to cgroup filesystem ──
+if sandbox bash -c '
+    wrote=false
+    for cg in /sys/fs/cgroup/memory/memory.limit_in_bytes \
+              /sys/fs/cgroup/cpu/cpu.cfs_quota_us \
+              /sys/fs/cgroup/unified/cgroup.procs \
+              /sys/fs/cgroup/cgroup.procs; do
+        if [[ -w "$cg" ]] 2>/dev/null; then
+            echo "WRITABLE:$cg"
+            wrote=true
+        fi
+    done
+    for cgdir in /sys/fs/cgroup/memory /sys/fs/cgroup/cpu /sys/fs/cgroup/unified /sys/fs/cgroup; do
+        if mkdir "$cgdir/escape-test-$$" 2>/dev/null; then
+            echo "MKDIR_OK:$cgdir/escape-test-$$"
+            rmdir "$cgdir/escape-test-$$" 2>/dev/null
+            wrote=true
+        fi
+    done
+    if ! $wrote; then
+        echo "CGROUP_READONLY"
+    fi
+'; then
+    if echo "$OUTPUT" | grep -q "CGROUP_READONLY"; then
+        pass "C01: Cgroup filesystem is read-only inside sandbox"
+    elif echo "$OUTPUT" | grep -q "WRITABLE\|MKDIR_OK"; then
+        fail "C01: Cgroup filesystem writable inside sandbox" "$OUTPUT"
+    else
+        pass "C01: Cgroup access restricted"
+    fi
+else
+    pass "C01: Cgroup test failed (sandbox restriction)"
+fi
+
+# ── F01: Verify FDs > 2 are closed inside sandbox ──
+if sandbox bash -c '
+    open_fds=""
+    for fd_num in $(ls /proc/self/fd 2>/dev/null); do
+        if [[ "$fd_num" -gt 2 ]] 2>/dev/null && [[ "$fd_num" -ne 255 ]]; then
+            target=$(readlink "/proc/self/fd/$fd_num" 2>/dev/null || echo "unknown")
+            case "$target" in
+                pipe:*|socket:*|anon_inode:*|/dev/null|unknown) continue ;;
+            esac
+            open_fds="$open_fds $fd_num:$target"
+        fi
+    done
+    if [[ -z "$open_fds" ]]; then
+        echo "CLEAN"
+    else
+        echo "LEAKED:$open_fds"
+    fi
+'; then
+    if echo "$OUTPUT" | grep -q "CLEAN"; then
+        pass "F01: No unexpected FDs > 2 inherited into sandbox"
+    elif echo "$OUTPUT" | grep -q "LEAKED"; then
+        fail "F01: Leaked FDs found inside sandbox" "$OUTPUT"
+    else
+        pass "F01: FD check completed (no leaks detected)"
+    fi
+else
+    fail "F01: FD inheritance check command failed" "$OUTPUT"
+fi
+
+# ── G01: Signal processes outside PID namespace ──
+if has_mount_ns; then
+    local _host_pid=$$
+    if sandbox bash -c "
+        kill -0 $_host_pid 2>&1
+        echo EXIT=\$?
+    "; then
+        if echo "$OUTPUT" | grep -qE "No such process|EXIT=[1-9]|not permitted"; then
+            pass "G01: Cannot signal host process from inside PID namespace"
+        elif echo "$OUTPUT" | grep -q "EXIT=0"; then
+            fail "G01: kill -0 succeeded on host PID $_host_pid (PID namespace leak)" "$OUTPUT"
+        else
+            pass "G01: Signal to host process blocked"
+        fi
+    else
+        pass "G01: Signal attack failed (good)"
+    fi
+else
+    skip "G01: No PID namespace isolation ($CURRENT_BACKEND backend)"
+fi
+
+echo ""
+
+# ── 11. Credential & identity protection ──────────────────────────
+
+echo "11. Credential & identity protection"
+
+# SSH env vars should not leak
+export SSH_AUTH_SOCK="/tmp/ssh-test/agent.123"
+export SSH_CONNECTION="1.2.3.4 1234 5.6.7.8 22"
+export SSH_CLIENT="1.2.3.4 1234 22"
+export SSH_TTY="/dev/pts/99"
+
+if sandbox bash -c 'echo ${SSH_AUTH_SOCK:-UNSET}'; then
+    if [[ "$OUTPUT" == "UNSET" ]]; then
+        pass "SSH_AUTH_SOCK is blocked"
+    else
+        fail "SSH_AUTH_SOCK leaked into sandbox" "$OUTPUT"
+    fi
+fi
+
+if sandbox bash -c 'echo ${SSH_CONNECTION:-UNSET}'; then
+    if [[ "$OUTPUT" == "UNSET" ]]; then
+        pass "SSH_CONNECTION is blocked"
+    else
+        fail "SSH_CONNECTION leaked into sandbox" "$OUTPUT"
+    fi
+fi
+
+unset SSH_AUTH_SOCK SSH_CONNECTION SSH_CLIENT SSH_TTY
+
+# Non-blocked env vars should pass through to the sandbox
+export _TEST_CRED_VAR="test-credential-value"
+if sandbox bash -c 'echo ${LANG:-UNSET}'; then
+    if [[ "$OUTPUT" != "UNSET" ]]; then
+        pass "Passthrough env vars (LANG) accessible"
+    else
+        # LANG may not be set on all systems
+        skip "LANG not set — passthrough test inconclusive"
+    fi
+fi
+unset _TEST_CRED_VAR
+
+# FILTER_PASSWD — verify /etc/passwd is filtered inside sandbox
+if is_bwrap; then
+    if sandbox bash -c 'wc -l < /etc/passwd'; then
+        _host_count=$(wc -l < /etc/passwd)
+        _sandbox_count="$OUTPUT"
+        if [[ "$_sandbox_count" -lt "$_host_count" ]]; then
+            pass "FILTER_PASSWD: /etc/passwd filtered (host: $_host_count → sandbox: $_sandbox_count lines)"
+        elif [[ "$_sandbox_count" -eq "$_host_count" ]]; then
+            # Could be that all users are system users (< 1000)
+            pass "FILTER_PASSWD: /etc/passwd overlaid (same count — all UIDs may be < 1000)"
+        fi
+    fi
+    # Slurm service users must be present (sbatch needs to resolve SlurmUser)
+    if sandbox bash -c 'grep -c "^slurm:" /etc/passwd'; then
+        pass "FILTER_PASSWD: slurm user preserved in filtered passwd"
+    else
+        fail "FILTER_PASSWD: slurm user missing from filtered passwd" "$OUTPUT"
+    fi
+    if sandbox bash -c 'grep "^passwd:" /etc/nsswitch.conf'; then
+        if [[ "$OUTPUT" == *"files"* ]] && [[ "$OUTPUT" != *"ldap"* ]] && [[ "$OUTPUT" != *"sss"* ]]; then
+            pass "FILTER_PASSWD: nsswitch.conf uses files-only for passwd"
+        else
+            fail "FILTER_PASSWD: nsswitch.conf still references ldap/sss" "$OUTPUT"
+        fi
+    fi
+elif is_firejail; then
+    # Firejail: check that LDAP users are not enumerable
+    _host_getent=$(getent passwd | wc -l)
+    if sandbox bash -c 'getent passwd | wc -l'; then
+        _sandbox_getent="$OUTPUT"
+        if [[ "$_sandbox_getent" -lt "$_host_getent" ]]; then
+            pass "FILTER_PASSWD: getent filtered (host: $_host_getent → sandbox: $_sandbox_getent)"
+        elif [[ "$_sandbox_getent" -eq "$_host_getent" ]]; then
+            # No LDAP configured — nothing to filter
+            skip "FILTER_PASSWD: no LDAP users to filter (host and sandbox both $_host_getent)"
+        fi
+    fi
+else
+    skip "FILTER_PASSWD: not supported on Landlock (no mount namespace)"
+fi
+
+# SANDBOX_BYPASS_TOKEN — verify the token file is hidden inside the sandbox
+# bwrap overlays with /dev/null; firejail blacklists; landlock relies on eBPF LSM
+if has_mount_ns; then
+    # Mount-namespace backends: test with a temp token file
+    _TOKEN_FILE="/tmp/.sandbox-test-bypass-token-$$"
+    echo "test-bypass-secret" > "$_TOKEN_FILE"
+    _TOKEN_RAW=$(SANDBOX_BYPASS_TOKEN="$_TOKEN_FILE" \
+        timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+        --project-dir "$PROJECT_DIR" -- cat "$_TOKEN_FILE" 2>&1) || true
+    _TOKEN_OUT=$(echo "$_TOKEN_RAW" | grep -v \
+        -e '^Warning:' -e '^Parent pid' -e '^Child process' -e '^Parent is shutting')
+    if echo "$_TOKEN_OUT" | grep -q "test-bypass-secret"; then
+        fail "SANDBOX_BYPASS_TOKEN is readable inside sandbox"
+    else
+        pass "SANDBOX_BYPASS_TOKEN is hidden inside sandbox"
+    fi
+    rm -f "$_TOKEN_FILE"
+else
+    # Landlock: cannot hide files via mount namespace. Check if eBPF LSM
+    # program (deny_token_read) is loaded and protecting a configured token.
+    _EBPF_LOADED=false
+    if command -v bpftool &>/dev/null; then
+        if sudo -n bpftool prog list 2>/dev/null | grep -q 'deny_token_read'; then
+            _EBPF_LOADED=true
+        fi
+    fi
+
+    if [[ "$_EBPF_LOADED" == "true" ]]; then
+        # eBPF is loaded — find the configured token path and test it
+        # Try sandbox.conf first, then auto-discover from admin wrapper config
+        _TOKEN_PATH=""
+        if [[ -f "$SCRIPT_DIR/sandbox.conf" ]]; then
+            _TOKEN_PATH=$(bash -c "source '$SCRIPT_DIR/sandbox.conf' 2>/dev/null; echo \"\$SANDBOX_BYPASS_TOKEN\"")
+        fi
+        if [[ -z "$_TOKEN_PATH" && -f /app/lib/agent-sandbox/sandbox.conf ]]; then
+            _TOKEN_PATH=$(bash -c 'source /app/lib/agent-sandbox/sandbox.conf 2>/dev/null; echo "$TOKEN_FILE"')
+        fi
+        if [[ -n "$_TOKEN_PATH" && -f "$_TOKEN_PATH" ]]; then
+            # Landlock sets NO_NEW_PRIVS — eBPF should deny the read
+            if sandbox cat "$_TOKEN_PATH" 2>&1; then
+                # eBPF is loaded but not blocking. This can happen if:
+                # - The eBPF program doesn't match this token path
+                # - The eBPF program checks a different condition than NoNewPrivs
+                # - The kernel version doesn't support the specific LSM hook
+                fail "SANDBOX_BYPASS_TOKEN readable despite eBPF (Landlock) — check eBPF program path match"
+            else
+                if echo "$OUTPUT" | grep -qi "permission denied\|operation not permitted"; then
+                    pass "SANDBOX_BYPASS_TOKEN protected by eBPF LSM (Landlock)"
+                else
+                    pass "SANDBOX_BYPASS_TOKEN not readable (Landlock + eBPF)"
+                fi
+            fi
+        else
+            skip "SANDBOX_BYPASS_TOKEN — eBPF loaded but no token path found (sandbox.conf or admin config)"
+        fi
+    else
+        skip "SANDBOX_BYPASS_TOKEN — Landlock needs eBPF LSM (not loaded; see ADMIN_HARDENING.md §1)"
+    fi
+fi
+
+echo ""
+
+# ── 12. Stability ─────────────────────────────────────────────────
+
+echo "12. Stability"
 
 # ── D01: Consistent isolation across repeated runs ──
 local _results=()
