@@ -252,23 +252,50 @@ validate_cwd() {
 create_wrapped_script() {
     local sandbox_exec="$1" project_dir="$2" script_content="$3" output_file="$4"
 
-    # Strip ALL #SBATCH directives from the user's script content.
-    # The only sbatch flags that should reach sbatch are the validated CLI args
-    # from VALIDATED_ARGS. Allowing #SBATCH directives in the script body would
-    # let users bypass the flag whitelist (e.g. --export, --uid, --prolog).
-    local sanitized_script
-    sanitized_script="$(printf '%s\n' "$script_content" | grep -v '^#SBATCH' || true)"
+    # Filter #SBATCH directives: keep safe ones, strip dangerous ones.
+    # This prevents bypassing the flag whitelist (e.g. #SBATCH --uid=0,
+    # #SBATCH --export=ALL, #SBATCH --prolog=/evil.sh) while preserving
+    # legitimate resource directives (--mem, --partition, --time, etc.).
+    local safe_directives=""
+    local stripped_count=0
+    while IFS= read -r line; do
+        if [[ "$line" == "#SBATCH"* ]]; then
+            # Extract the flag from the directive
+            local directive_body="${line#\#SBATCH}"
+            directive_body="${directive_body# }"  # strip leading space
+            # Get the flag name (before = or space)
+            local flag_name
+            case "$directive_body" in
+                --*=*) flag_name="${directive_body%%=*}" ;;
+                --*)   flag_name="${directive_body%% *}" ;;
+                -*)    flag_name="${directive_body:0:2}" ;;
+                *)     flag_name="" ;;
+            esac
+            if [[ -n "$flag_name" ]] && _is_allowed_flag "$flag_name"; then
+                safe_directives+="$line"$'\n'
+            else
+                stripped_count=$((stripped_count + 1))
+            fi
+        fi
+    done <<< "$script_content"
 
-    # Create a temp file for the original script (compute node needs it on NFS)
+    if [[ "$stripped_count" -gt 0 ]]; then
+        echo "chaperon: stripped $stripped_count unsafe #SBATCH directive(s) from script" >&2
+    fi
+
+    # Create a temp file for the original script (compute node needs it on NFS).
+    # Strip #SBATCH directives from the script body — they'll be in the wrapper.
     local orig_script
     orig_script="$(mktemp "${TMPDIR:-/tmp}/chaperon-script-XXXXXX.sh")"
-    printf '%s\n' "$sanitized_script" > "$orig_script"
+    printf '%s\n' "$script_content" | grep -v '^#SBATCH' >> "$orig_script" || true
     chmod +x "$orig_script"
 
-    # Build wrapper — no #SBATCH directives are included; all sbatch options
-    # come exclusively from VALIDATED_ARGS on the command line.
+    # Build wrapper with validated #SBATCH directives
     {
         printf '#!/bin/bash --\n'
+        if [[ -n "$safe_directives" ]]; then
+            printf '%s' "$safe_directives"
+        fi
         printf '\n# --- Chaperon wrapper (auto-generated) ---\n'
         printf '# Clean up original script on exit\n'
         printf 'trap %s EXIT\n' "$(printf "'rm -f %q'" "$orig_script")"
