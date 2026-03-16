@@ -26,9 +26,8 @@ sandbox-exec.sh
               - stub sbatch → writes to req FIFO → chaperon validates,
                 wraps in sandbox-exec.sh, calls real sbatch → writes
                 response to per-request FIFO → stub reads result
-              - stub srun (login node) → prints "use sbatch" → exits 1
-              - stub srun (compute node, SLURM_JOB_ID set) → validates
-                flags against whitelist → execs real srun for step launching
+              - stub srun → writes to req FIFO → chaperon validates flags,
+                blocks if no SLURM_JOB_ID, execs real srun for steps
 ```
 
 ### Component Roles
@@ -42,7 +41,8 @@ sandbox-exec.sh
 | **handlers/_handler_lib.sh** | Outside sandbox | Argument whitelist, CWD validation, wrapper script generation |
 | **handlers/scancel.sh** | Outside sandbox | Validates job scope, cancels via real scancel |
 | **stubs/sbatch** | Inside sandbox | Parses user's sbatch invocation, sends request via named pipe |
-| **stubs/srun** | Inside sandbox | Login node: blocks with error. Compute node: validates flags, execs real srun for step launching |
+| **stubs/srun** | Inside sandbox | Sends srun requests to chaperon via named pipe |
+| **handlers/srun.sh** | Outside sandbox | Validates srun flags, allows step launching only (SLURM_JOB_ID), execs real srun |
 | **stubs/scancel** | Inside sandbox | Sends cancel requests to chaperon via named pipe |
 | **stubs/_stub_lib.sh** | Inside sandbox | Stub-to-chaperon communication helpers |
 
@@ -56,6 +56,7 @@ chaperon/
 │   ├── _handler_lib.sh      # Arg whitelisting, CWD validation, job wrapping
 │   ├── sbatch.sh            # Validates, wraps, submits via real sbatch
 │   ├── scancel.sh           # Validates job scope, cancels via real scancel
+│   ├── srun.sh              # Validates step flags, execs real srun (SLURM_JOB_ID required)
 │   └── blocked.sh           # Generic "blocked" response
 └── stubs/
     ├── _stub_lib.sh          # Stub→chaperon communication
@@ -195,14 +196,11 @@ Unknown flags (not in the whitelist) are also rejected.
 | Resource | bwrap | firejail | landlock |
 |---|---|---|---|
 | `/run/munge/` (auth socket) | Hidden (tmpfs /run, not re-mounted) | `--blacklist=/run/munge` | Not granted (EACCES) |
-| `/usr/bin/{sbatch,scancel,...}` | `--ro-bind /dev/null` | `--blacklist=` | Not blocked (known limitation) |
-| `/usr/bin/srun` | Blocked at original path; exposed at `/run/sandbox/srun-real` for step stub | Not blacklisted (stub controls access) | Not blocked (stub controls access) |
+| `/usr/bin/{sbatch,srun,...}` | `--ro-bind /dev/null` | `--blacklist=` | Not blocked (known limitation) |
 | `/etc/slurm/`, `/etc/slurm-llnl/` | `--tmpfs` | `--blacklist=` | Not blocked |
 | Munge auth capability | **None** — can't auth without socket | **None** | **None** — EACCES on socket |
 
-**Compute-node exception**: When `SLURM_JOB_ID` is set (inside a Slurm allocation), munge and slurm config are exposed read-only so that `srun` can launch job steps within the existing sandboxed allocation. This is safe because the allocation itself was approved by the chaperon, and the srun stub validates all flags.
-
-**Defense in depth**: Without the munge socket (login node), even finding a Slurm binary (on Landlock where `/usr/bin` can't be blocked) is useless — authentication will fail. The chaperon is the only path to job submission.
+**Defense in depth**: Without the munge socket, even finding a Slurm binary (on Landlock where `/usr/bin` can't be blocked) is useless — authentication will fail. The chaperon is the only path to Slurm interaction (job submission and step launching).
 
 ## Comparison with Previous Architecture
 

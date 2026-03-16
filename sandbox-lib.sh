@@ -27,13 +27,7 @@ SANDBOX_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # Derived from chaperon/stubs/ — any executable file whose name does NOT
 # start with "_" is treated as a command to block in /usr/bin.
 # This also includes common Slurm binaries that we block even without stubs.
-#
-# srun is included in the list but handled specially by each backend:
-#   bwrap:    blocks /usr/bin/srun, exposes at /usr/lib/sandbox/srun-real
-#   firejail: skips srun in blacklist (needs real binary for step launching)
-#   landlock: can't block binaries; srun already accessible at /usr/bin/srun
-# Defense-in-depth: munge socket is blocked in all backends, so even direct
-# /usr/bin/srun calls cannot submit new jobs (only step launching works).
+# All Slurm communication goes through the chaperon (outside the sandbox).
 _build_chaperon_blocked_binaries() {
     CHAPERON_BLOCKED_BINARIES=()
     local stubs_dir="$SANDBOX_DIR/chaperon/stubs"
