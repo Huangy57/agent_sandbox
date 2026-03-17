@@ -777,9 +777,19 @@ generate_filtered_passwd() {
             getent group "$_svc_group" >> "$tmpdir/group" 2>/dev/null || true
         fi
     done
+    # Add all of the current user's groups (by GID and by name as fallback).
+    # This ensures `id` inside the sandbox shows the correct group names,
+    # even though supplementary groups are always preserved at the kernel level
+    # (bwrap does not use --unshare-user, so file permissions work regardless).
     for _svc_gid in $(id -G) $(getent passwd slurm 2>/dev/null | cut -d: -f4) $(getent passwd munge 2>/dev/null | cut -d: -f4); do
         if ! grep -q "^[^:]*:[^:]*:${_svc_gid}:" "$tmpdir/group"; then
             getent group "$_svc_gid" >> "$tmpdir/group" 2>/dev/null || true
+        fi
+    done
+    # Fallback: also try by name (some LDAP setups resolve names but not GIDs)
+    for _svc_gname in $(id -Gn 2>/dev/null); do
+        if ! grep -q "^${_svc_gname}:" "$tmpdir/group"; then
+            getent group "$_svc_gname" >> "$tmpdir/group" 2>/dev/null || true
         fi
     done
 
