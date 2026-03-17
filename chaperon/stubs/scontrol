@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/scontrol — Chaperon-proxied scontrol stub
+#
+# Proxies scontrol through the chaperon, which validates subcommands
+# and scopes job operations to chaperon-submitted jobs only.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call scontrol "$@"
+exit $?

@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/squeue — Chaperon-proxied squeue stub
+#
+# Proxies squeue through the chaperon, which filters output to only
+# show jobs within scope (project/session/user).
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call squeue "$@"
+exit $?

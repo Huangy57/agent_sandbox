@@ -375,3 +375,28 @@ _query_chaperon_jobs() {
         | awk '{print $1}' \
         || true
 }
+
+# Get the set of job IDs that this scope allows.
+# Prints job IDs one per line.
+# Usage: _get_scoped_jobs <scope> <project_dir>
+_get_scoped_jobs() {
+    local scope="$1" project_dir="$2"
+
+    case "$scope" in
+        session)
+            _query_chaperon_jobs "chaperon:sid=${_CHAPERON_SESSION_ID}[,.]"
+            ;;
+        project)
+            local proj_hash
+            proj_hash="$(printf '%s' "$project_dir" | md5sum | cut -c1-12)"
+            _query_chaperon_jobs "chaperon:.*proj=${proj_hash}"
+            ;;
+        user)
+            _query_chaperon_jobs "chaperon:"
+            ;;
+        *)
+            echo "chaperon: unknown scope: $scope" >&2
+            return 1
+            ;;
+    esac
+}

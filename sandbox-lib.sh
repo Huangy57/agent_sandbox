@@ -41,7 +41,7 @@ _build_chaperon_blocked_binaries() {
         done
     fi
     # Always block these even without stubs (defense in depth)
-    for bin in scontrol salloc sattach; do
+    for bin in salloc sattach; do
         local found=false
         for existing in "${CHAPERON_BLOCKED_BINARIES[@]}"; do
             [[ "$existing" == "$bin" ]] && found=true && break

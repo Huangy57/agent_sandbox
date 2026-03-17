@@ -48,7 +48,11 @@ sandbox-exec.sh
 | **stubs/sbatch** | Inside sandbox | Parses user's sbatch invocation, sends request via named pipe |
 | **stubs/srun** | Inside sandbox | Sends srun requests to chaperon via named pipe |
 | **handlers/srun.sh** | Outside sandbox | Validates srun flags; alloc mode wraps command in sandbox-exec.sh, step mode execs real srun |
+| **handlers/squeue.sh** | Outside sandbox | Filters squeue output to only show jobs in scope |
+| **handlers/scontrol.sh** | Outside sandbox | Validates scontrol subcommands; scopes job operations to chaperon-submitted jobs |
 | **stubs/scancel** | Inside sandbox | Sends cancel requests to chaperon via named pipe |
+| **stubs/squeue** | Inside sandbox | Sends squeue requests to chaperon via named pipe |
+| **stubs/scontrol** | Inside sandbox | Sends scontrol requests to chaperon via named pipe |
 | **stubs/_stub_lib.sh** | Inside sandbox | Stub-to-chaperon communication helpers |
 
 ## File Structure
@@ -61,13 +65,17 @@ chaperon/
 │   ├── _handler_lib.sh      # Arg whitelisting, CWD validation, job wrapping
 │   ├── sbatch.sh            # Validates, wraps, submits via real sbatch
 │   ├── scancel.sh           # Validates job scope, cancels via real scancel
-│   ├── srun.sh              # Validates step flags, execs real srun (SLURM_JOB_ID required)
+│   ├── srun.sh              # Validates srun flags, wraps or execs real srun
+│   ├── squeue.sh            # Filters squeue output to scoped jobs
+│   ├── scontrol.sh          # Scoped scontrol: show, hold, release, requeue, update
 │   └── blocked.sh           # Generic "blocked" response
 └── stubs/
     ├── _stub_lib.sh          # Stub→chaperon communication
     ├── sbatch                # PATH-shadowing stub (talks to chaperon)
     ├── scancel               # Sends cancel requests to chaperon
-    └── srun                  # Standalone blocked stub (no chaperon)
+    ├── srun                  # PATH-shadowing stub (talks to chaperon)
+    ├── squeue                # PATH-shadowing stub (talks to chaperon)
+    └── scontrol              # PATH-shadowing stub (talks to chaperon)
 ```
 
 ## Protocol: `CHAPERON/1`
@@ -172,8 +180,8 @@ Configured via `CHAPERON_SCANCEL_SCOPE` in `sandbox.conf`:
 
 | Scope | Behavior | squeue filter |
 |---|---|---|
-| `session` (default) | Only jobs from THIS sandbox session | `chaperon:sid=<this_session>` |
-| `project` | Jobs from any sandbox with same project dir | `chaperon:.*proj=<hash>` |
+| `session` | Only jobs from THIS sandbox session | `chaperon:sid=<this_session>` |
+| `project` (default) | Jobs from any sandbox with same project dir | `chaperon:.*proj=<hash>` |
 | `user` | Any chaperon-submitted job of this user | `chaperon:` prefix |
 
 ### Denied sbatch Flags
@@ -226,6 +234,31 @@ The srun handler (`handlers/srun.sh`) operates in two modes:
 | `--network` | Network namespace manipulation |
 
 In step mode, allocation flags (`-p`, `-A`, `-t`, `-q`, `--reservation`, etc.) are also denied.
+
+### squeue Handler
+
+The squeue handler (`handlers/squeue.sh`) filters queue output to only show jobs within scope. Uses the same `CHAPERON_SCANCEL_SCOPE` setting as scancel.
+
+- Flags like `--user`, `--me`, `--account` are denied (scope controlled by chaperon)
+- If specific job IDs are requested via `-j`, they're validated against scope
+- Otherwise, all jobs in scope are shown
+
+### scontrol Handler
+
+The scontrol handler (`handlers/scontrol.sh`) allows a subset of scontrol subcommands with scope enforcement:
+
+| Subcommand | Scoped? | Notes |
+|---|---|---|
+| `show job [ID]` | Yes | Shows only chaperon-submitted jobs |
+| `show node/partition/config` | No | Read-only system info |
+| `hold JOBID` | Yes | Must be in scope |
+| `release JOBID` | Yes | Must be in scope |
+| `requeue JOBID` | Yes | Must be in scope |
+| `update job JOBID Key=Val` | Yes | Must be in scope; only safe update keys allowed |
+
+Denied subcommands: `shutdown`, `reconfigure`, `create`, `delete`, and all others.
+
+Denied update keys: `UserId`, `GroupId`, `WorkDir`, `AdminComment`, and all keys not in the whitelist. See `handlers/scontrol.sh` for the full list.
 
 ## What Gets Blocked Inside the Sandbox
 
@@ -305,11 +338,11 @@ Add the flag to `_SBATCH_ALLOWED_FLAGS` in `handlers/_handler_lib.sh`. If it tak
 Set `CHAPERON_SCANCEL_SCOPE` in `sandbox.conf`:
 
 ```bash
-# Only cancel jobs submitted by this sandbox session (default)
-CHAPERON_SCANCEL_SCOPE="session"
-
-# Cancel jobs submitted by any sandbox with the same project dir
+# Cancel jobs submitted by any sandbox with the same project dir (default)
 CHAPERON_SCANCEL_SCOPE="project"
+
+# Only cancel jobs submitted by this sandbox session
+CHAPERON_SCANCEL_SCOPE="session"
 
 # Cancel any chaperon-submitted job of the current user
 CHAPERON_SCANCEL_SCOPE="user"

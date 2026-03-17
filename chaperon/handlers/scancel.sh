@@ -53,35 +53,6 @@ _is_scancel_value_flag() {
     [[ "$_SCANCEL_VALUE_FLAGS" == *" $1 "* ]]
 }
 
-# ── Scope queries ────────────────────────────────────────────────
-
-# Get the set of job IDs that this scope is allowed to cancel.
-# Prints job IDs one per line.
-_get_scoped_jobs() {
-    local scope="$1" project_dir="$2"
-
-    case "$scope" in
-        session)
-            # Match this exact session ID
-            _query_chaperon_jobs "chaperon:sid=${_CHAPERON_SESSION_ID}[,.]"
-            ;;
-        project)
-            # Match any session with this project hash
-            local proj_hash
-            proj_hash="$(printf '%s' "$project_dir" | md5sum | cut -c1-12)"
-            _query_chaperon_jobs "chaperon:.*proj=${proj_hash}"
-            ;;
-        user)
-            # Match any chaperon-submitted job
-            _query_chaperon_jobs "chaperon:"
-            ;;
-        *)
-            echo "chaperon: unknown CHAPERON_SCANCEL_SCOPE: $scope" >&2
-            return 1
-            ;;
-    esac
-}
-
 # ── Handler ─────────────────────────────────────────────────────
 
 handle_scancel() {
@@ -94,7 +65,7 @@ handle_scancel() {
         return 1
     fi
 
-    local scope="${CHAPERON_SCANCEL_SCOPE:-session}"
+    local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
 
     # Parse and validate arguments
     local validated_flags=()

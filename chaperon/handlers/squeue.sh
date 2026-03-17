@@ -1,0 +1,135 @@
+#! /bin/bash --
+# chaperon/handlers/squeue.sh — Handle squeue requests from sandbox
+#
+# Filters squeue output to only show jobs within scope (project by default).
+# Uses the same --comment tag set by the sbatch handler for scoping.
+#
+# Scope levels (reuses CHAPERON_SCANCEL_SCOPE from sandbox.conf):
+#   "project"  — jobs from any sandbox session with same project dir (default)
+#   "session"  — only jobs submitted by THIS sandbox session
+#   "user"     — any chaperon-submitted job of this user
+
+source "$(dirname "${BASH_SOURCE[0]}")/_handler_lib.sh"
+
+# ── Allowed squeue flags ─────────────────────────────────────────
+_SQUEUE_ALLOWED_FLAGS=" \
+  -h --noheader \
+  -l --long \
+  -o --format \
+  -O --Format \
+  -S --sort \
+  -t --states \
+  -p --partition \
+  -n --name \
+  -j --jobs \
+  -w --nodelist \
+  --start \
+  --array \
+  -r --array-unique \
+  -v --verbose \
+  -Q --quiet \
+  --help \
+  --usage \
+  --version \
+  --json \
+  --yaml \
+"
+
+_SQUEUE_VALUE_FLAGS=" \
+  -o --format \
+  -O --Format \
+  -S --sort \
+  -t --states \
+  -p --partition \
+  -n --name \
+  -j --jobs \
+  -w --nodelist \
+"
+
+_is_squeue_allowed() {
+    local base="${1%%=*}"
+    [[ "$_SQUEUE_ALLOWED_FLAGS" == *" $base "* ]]
+}
+
+_is_squeue_value_flag() {
+    [[ "$_SQUEUE_VALUE_FLAGS" == *" $1 "* ]]
+}
+
+handle_squeue() {
+    local project_dir="$1"
+    local sandbox_exec="$2"
+
+    local real_squeue="${REAL_SQUEUE:-/usr/bin/squeue}"
+    if [[ ! -x "$real_squeue" ]]; then
+        echo "chaperon: real squeue not found at $real_squeue" >&2
+        return 1
+    fi
+
+    local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
+
+    # Parse and validate arguments
+    local validated_flags=()
+    local i=0
+    while (( i < ${#REQ_ARGS[@]} )); do
+        local arg="${REQ_ARGS[$i]}"
+        case "$arg" in
+            # Denied: scope is controlled by the chaperon
+            -u|--user|--user=*|--me|--account|--account=*)
+                echo "chaperon: squeue flag '$arg' not allowed (scope controlled by chaperon)" >&2
+                return 1
+                ;;
+            --*=*)
+                if _is_squeue_allowed "$arg"; then
+                    validated_flags+=("$arg")
+                else
+                    echo "chaperon: denied unknown squeue flag: ${arg%%=*}" >&2
+                    return 1
+                fi
+                ;;
+            -*)
+                if _is_squeue_allowed "$arg"; then
+                    validated_flags+=("$arg")
+                    if _is_squeue_value_flag "$arg" && (( i + 1 < ${#REQ_ARGS[@]} )); then
+                        (( i++ )) || true
+                        validated_flags+=("${REQ_ARGS[$i]}")
+                    fi
+                else
+                    echo "chaperon: denied unknown squeue flag: $arg" >&2
+                    return 1
+                fi
+                ;;
+            *)
+                echo "chaperon: invalid squeue argument: $arg" >&2
+                return 1
+                ;;
+        esac
+        (( i++ )) || true
+    done
+
+    # Handle --help/--version/--usage
+    for f in "${validated_flags[@]}"; do
+        case "$f" in --help|--usage|--version)
+            local rc=0
+            "$real_squeue" "${validated_flags[@]}" || rc=$?
+            return "$rc"
+            ;;
+        esac
+    done
+
+    # Get all job IDs in scope
+    local scoped_job_ids
+    scoped_job_ids="$(_get_scoped_jobs "$scope" "$project_dir")"
+
+    if [[ -z "$scoped_job_ids" ]]; then
+        # No jobs in scope — output nothing (or just headers)
+        return 0
+    fi
+
+    # Build comma-separated job ID list for -j filter
+    local job_id_list
+    job_id_list="$(echo "$scoped_job_ids" | tr '\n' ',' | sed 's/,$//')"
+
+    local rc=0
+    "$real_squeue" --me -j "$job_id_list" "${validated_flags[@]}" || rc=$?
+    return "$rc"
+}
