@@ -154,6 +154,10 @@ fi
 # The chaperon's own error logging goes to stderr inside dispatch_handler
 # and is captured per-request, not on the process-level stderr.
 if [[ -n "$_CHAPERON_DIR" ]]; then
+    # Export config vars that chaperon handlers need (shell variables
+    # are not inherited by child processes unless exported).
+    export SLURM_SCOPE="${SLURM_SCOPE:-project}"
+
     "$SCRIPT_DIR/chaperon/chaperon.sh" \
         "$_CHAPERON_DIR" "$PROJECT_DIR" "$SCRIPT_DIR/sandbox-exec.sh" \
         >/dev/null 2>/dev/null &
