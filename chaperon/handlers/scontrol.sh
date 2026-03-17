@@ -62,7 +62,7 @@ handle_scontrol() {
         return 1
     fi
 
-    local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
+    local scope="${SLURM_SCOPE:-project}"
 
     if [[ ${#REQ_ARGS[@]} -eq 0 ]]; then
         echo "sandbox: scontrol requires a subcommand. Allowed: show, hold, release, requeue, update job" >&2

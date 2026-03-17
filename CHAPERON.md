@@ -186,15 +186,16 @@ The scancel handler (`handlers/scancel.sh`) queries `squeue --comment` to resolv
 3. **Scope filtering**: Requested job IDs are checked against `squeue` output filtered by the chaperon tag.
 4. **`scancel all`**: Cancels everything within scope (no specific IDs needed).
 
-#### scancel Scope Levels
+#### Scope Levels
 
-Configured via `CHAPERON_SCANCEL_SCOPE` in `sandbox.conf`:
+Configured via `SLURM_SCOPE` in `sandbox.conf`. Applies to scancel, squeue, scontrol, and sstat:
 
-| Scope | Behavior | squeue filter |
+| Scope | Behavior | Filter |
 |---|---|---|
 | `session` | Only jobs from THIS sandbox session | `chaperon:sid=<this_session>` |
 | `project` (default) | Jobs from any sandbox with same project dir | `chaperon:.*proj=<hash>` |
-| `user` | Any chaperon-submitted job of this user | `chaperon:` prefix |
+| `user` | All jobs of the current user (including non-sandbox jobs) | `squeue --me` |
+| `none` | No scope restriction (full access to your own jobs) | `squeue --me` |
 
 ### Denied sbatch Flags
 
@@ -249,7 +250,7 @@ In step mode, allocation flags (`-p`, `-A`, `-t`, `-q`, `--reservation`, etc.) a
 
 ### squeue Handler
 
-The squeue handler (`handlers/squeue.sh`) filters queue output to only show jobs within scope. Uses the same `CHAPERON_SCANCEL_SCOPE` setting as scancel.
+The squeue handler (`handlers/squeue.sh`) filters queue output to only show jobs within scope. Uses the `SLURM_SCOPE` setting from `sandbox.conf`.
 
 - Flags like `--user`, `--me`, `--account` are denied (scope controlled by chaperon)
 - If specific job IDs are requested via `-j`, they're validated against scope
@@ -402,19 +403,22 @@ To block a command without proxying it, create a standalone stub that prints an 
 
 Add the flag to `_SBATCH_ALLOWED_FLAGS` in `handlers/_handler_lib.sh`. If it takes a value argument, also add it to `_SBATCH_VALUE_FLAGS`.
 
-### Configuring scancel scope
+### Configuring Slurm scope
 
-Set `CHAPERON_SCANCEL_SCOPE` in `sandbox.conf`:
+Set `SLURM_SCOPE` in `sandbox.conf`:
 
 ```bash
-# Cancel jobs submitted by any sandbox with the same project dir (default)
-CHAPERON_SCANCEL_SCOPE="project"
+# Jobs from any sandbox session with the same project dir (default)
+SLURM_SCOPE="project"
 
-# Only cancel jobs submitted by this sandbox session
-CHAPERON_SCANCEL_SCOPE="session"
+# Only jobs submitted by THIS sandbox session
+SLURM_SCOPE="session"
 
-# Cancel any chaperon-submitted job of the current user
-CHAPERON_SCANCEL_SCOPE="user"
+# All jobs of the current user (including non-sandbox jobs)
+SLURM_SCOPE="user"
+
+# No restriction (full access to your own jobs)
+SLURM_SCOPE="none"
 ```
 
 ### Querying sandbox jobs

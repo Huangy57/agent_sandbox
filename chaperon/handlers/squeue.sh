@@ -4,10 +4,11 @@
 # Filters squeue output to only show jobs within scope (project by default).
 # Uses the same --comment tag set by the sbatch handler for scoping.
 #
-# Scope levels (reuses CHAPERON_SCANCEL_SCOPE from sandbox.conf):
+# Scope levels (configured via SLURM_SCOPE in sandbox.conf):
 #   "project"  — jobs from any sandbox session with same project dir (default)
 #   "session"  — only jobs submitted by THIS sandbox session
-#   "user"     — any chaperon-submitted job of this user
+#   "user"     — all jobs of the current user
+#   "none"     — no scope restriction
 
 source "$(dirname "${BASH_SOURCE[0]}")/_handler_lib.sh"
 
@@ -65,7 +66,7 @@ handle_squeue() {
         return 1
     fi
 
-    local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
+    local scope="${SLURM_SCOPE:-project}"
 
     # Parse and validate arguments
     local validated_flags=()
@@ -116,12 +117,19 @@ handle_squeue() {
         esac
     done
 
-    # Get all job IDs in scope
+    # For "user" and "none" scopes, just show all user jobs directly
+    if [[ "$scope" == "user" || "$scope" == "none" ]]; then
+        local rc=0
+        "$real_squeue" --me "${validated_flags[@]}" || rc=$?
+        return "$rc"
+    fi
+
+    # For session/project scopes, filter by chaperon tag
     local scoped_job_ids
     scoped_job_ids="$(_get_scoped_jobs "$scope" "$project_dir")"
 
     if [[ -z "$scoped_job_ids" ]]; then
-        # No jobs in scope — output nothing (or just headers)
+        # No jobs in scope — output nothing
         return 0
     fi
 

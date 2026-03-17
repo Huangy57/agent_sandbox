@@ -3,10 +3,11 @@
 #
 # Cancels Slurm jobs, scoped by querying the chaperon tag in --comment.
 #
-# Scope levels (configured via CHAPERON_SCANCEL_SCOPE in sandbox.conf):
+# Scope levels (configured via SLURM_SCOPE in sandbox.conf):
 #   "project"  — jobs tagged with the same project hash, any session (default)
 #   "session"  — only jobs tagged with THIS session's ID
-#   "user"     — any job tagged by any chaperon instance of this user
+#   "user"     — all jobs of the current user (including non-sandbox jobs)
+#   "none"     — no scope restriction (full access to your own jobs)
 #
 # The tag is set by the sbatch handler:
 #   --comment="chaperon:sid=<session_id>,proj=<project_hash>[,user=<comment>]"
@@ -65,7 +66,7 @@ handle_scancel() {
         return 1
     fi
 
-    local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
+    local scope="${SLURM_SCOPE:-project}"
 
     # Parse and validate arguments
     local validated_flags=()
@@ -77,7 +78,7 @@ handle_scancel() {
         case "$arg" in
             # Denied: scope is controlled by the chaperon
             -u|--user|--user=*|--me|--account|--account=*|--wckey|--wckey=*)
-                echo "sandbox: scancel '$arg' is not allowed — job scope is controlled by the sandbox (CHAPERON_SCANCEL_SCOPE in sandbox.conf)." >&2
+                echo "sandbox: scancel '$arg' is not allowed — job scope is controlled by the sandbox (SLURM_SCOPE in sandbox.conf)." >&2
                 return 1
                 ;;
             --*=*)

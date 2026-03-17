@@ -68,7 +68,7 @@ handle_sstat() {
         return 1
     fi
 
-    local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
+    local scope="${SLURM_SCOPE:-project}"
 
     # Parse and validate arguments
     local validated_flags=()

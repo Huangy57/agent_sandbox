@@ -399,11 +399,16 @@ _get_scoped_jobs() {
             proj_hash="$(printf '%s' "$project_dir" | md5sum | cut -c1-12)"
             _query_chaperon_jobs "chaperon:.*proj=${proj_hash}"
             ;;
-        user)
-            _query_chaperon_jobs "chaperon:"
+        user|none)
+            # "user" returns all chaperon-tagged jobs; "none" returns ALL user jobs
+            if [[ "$scope" == "none" ]]; then
+                squeue --me -h -o "%i" 2>/dev/null || true
+            else
+                _query_chaperon_jobs "chaperon:"
+            fi
             ;;
         *)
-            echo "sandbox: unknown CHAPERON_SCANCEL_SCOPE value: '$scope'. Valid values: session, project, user" >&2
+            echo "sandbox: unknown SLURM_SCOPE value: '$scope'. Valid values: session, project, user, none" >&2
             return 1
             ;;
     esac
@@ -447,7 +452,12 @@ _validate_job_in_scope() {
             [[ "$tag_prefix" == *"proj=${proj_hash}"* ]] && match=true
             ;;
         user)
-            [[ "$comment" == "chaperon:"* ]] && match=true
+            # "user" allows any job owned by this user (squeue --me already filters by uid)
+            match=true
+            ;;
+        none)
+            # No scope restriction
+            match=true
             ;;
     esac
 
