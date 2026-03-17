@@ -24,12 +24,12 @@ handle_sacctmgr() {
 
     local real_sacctmgr="${REAL_SACCTMGR:-/usr/bin/sacctmgr}"
     if [[ ! -x "$real_sacctmgr" ]]; then
-        echo "chaperon: real sacctmgr not found at $real_sacctmgr" >&2
+        echo "sandbox: sacctmgr binary not found at $real_sacctmgr — is Slurm installed?" >&2
         return 1
     fi
 
     if [[ ${#REQ_ARGS[@]} -eq 0 ]]; then
-        echo "chaperon: sacctmgr requires a subcommand" >&2
+        echo "sandbox: sacctmgr requires a subcommand. Only 'show' is allowed (e.g., sacctmgr show qos)." >&2
         return 1
     fi
 
@@ -51,7 +51,7 @@ handle_sacctmgr() {
                 pre_flags+=("$arg")
                 ;;
             -*)
-                echo "chaperon: denied unknown sacctmgr flag: $arg" >&2
+                echo "sandbox: sacctmgr flag '$arg' is not recognized." >&2
                 return 1
                 ;;
             *)
@@ -64,7 +64,7 @@ handle_sacctmgr() {
     done
 
     if [[ -z "$subcmd" ]]; then
-        echo "chaperon: sacctmgr requires a subcommand (show)" >&2
+        echo "sandbox: sacctmgr requires a subcommand. Only 'show' is allowed (e.g., sacctmgr show qos)." >&2
         return 1
     fi
 
@@ -73,18 +73,18 @@ handle_sacctmgr() {
         show|list)
             ;;
         add|create|modify|update|delete|remove|archive|dump|load|reconfigure)
-            echo "chaperon: sacctmgr '$subcmd' is not allowed inside the sandbox" >&2
+            echo "sandbox: sacctmgr '$subcmd' is not allowed — only read-only queries are permitted." >&2
             return 1
             ;;
         *)
-            echo "chaperon: sacctmgr '$subcmd' is not allowed inside the sandbox" >&2
+            echo "sandbox: sacctmgr '$subcmd' is not allowed — only read-only queries are permitted." >&2
             return 1
             ;;
     esac
 
     # Validate the show target
     if (( subcmd_idx >= ${#REQ_ARGS[@]} )); then
-        echo "chaperon: sacctmgr show requires a target (cluster, qos, tres, configuration)" >&2
+        echo "sandbox: sacctmgr show requires a target: cluster, qos, tres, configuration" >&2
         return 1
     fi
 
@@ -100,11 +100,11 @@ handle_sacctmgr() {
             ;;
         # Denied: user/group enumeration
         user|users|account|accounts|association|associations|coordinator|coordinators|event|events|problem|problems|reservation|reservations|runawayjobs|transaction|transactions|wckey|wckeys)
-            echo "chaperon: sacctmgr show '$target' denied (user/group enumeration)" >&2
+            echo "sandbox: sacctmgr show '$target' is not allowed — it could enumerate users or accounts." >&2
             return 1
             ;;
         *)
-            echo "chaperon: sacctmgr show '$target' not allowed" >&2
+            echo "sandbox: sacctmgr show '$target' is not allowed. Allowed targets: cluster, qos, tres, configuration" >&2
             return 1
             ;;
     esac

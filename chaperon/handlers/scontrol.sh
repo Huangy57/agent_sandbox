@@ -54,7 +54,7 @@ _validate_job_in_scope() {
 
     local base_id="${job_id%%_*}"
     if [[ ! "$base_id" =~ ^[0-9]+$ ]]; then
-        echo "chaperon: invalid job ID: $job_id" >&2
+        echo "sandbox: '$job_id' is not a valid job ID." >&2
         return 1
     fi
 
@@ -63,7 +63,7 @@ _validate_job_in_scope() {
     comment="$(squeue -j "$base_id" --me -h -o "%k" 2>/dev/null)" || true
 
     if [[ -z "$comment" ]]; then
-        echo "chaperon: scontrol denied for job $job_id (not found or not owned)" >&2
+        echo "sandbox: job $job_id not found in queue or not owned by you." >&2
         return 1
     fi
 
@@ -84,7 +84,7 @@ _validate_job_in_scope() {
     esac
 
     if ! "$match"; then
-        echo "chaperon: scontrol denied for job $job_id (not in $scope scope)" >&2
+        echo "sandbox: job $job_id was not submitted by this $scope — cannot modify." >&2
         return 1
     fi
     return 0
@@ -96,14 +96,14 @@ handle_scontrol() {
 
     local real_scontrol="${REAL_SCONTROL:-/usr/bin/scontrol}"
     if [[ ! -x "$real_scontrol" ]]; then
-        echo "chaperon: real scontrol not found at $real_scontrol" >&2
+        echo "sandbox: scontrol binary not found at $real_scontrol — is Slurm installed?" >&2
         return 1
     fi
 
     local scope="${CHAPERON_SCANCEL_SCOPE:-project}"
 
     if [[ ${#REQ_ARGS[@]} -eq 0 ]]; then
-        echo "chaperon: scontrol requires a subcommand" >&2
+        echo "sandbox: scontrol requires a subcommand. Allowed: show, hold, release, requeue, update job" >&2
         return 1
     fi
 
@@ -113,7 +113,7 @@ handle_scontrol() {
         # ── Read-only show commands ──
         show)
             if [[ ${#REQ_ARGS[@]} -lt 2 ]]; then
-                echo "chaperon: scontrol show requires a target (job, node, partition, config)" >&2
+                echo "sandbox: scontrol show requires a target: job, node, partition, config, step" >&2
                 return 1
             fi
             local target="${REQ_ARGS[1]}"
@@ -151,11 +151,11 @@ handle_scontrol() {
                     return "$rc"
                     ;;
                 assoc_mgr|burstbuffer|dwstat|federation|frontend|lic|licenses|topology)
-                    echo "chaperon: scontrol show '$target' denied (may expose user/account data)" >&2
+                    echo "sandbox: scontrol show '$target' is not allowed — it may expose user or account data." >&2
                     return 1
                     ;;
                 *)
-                    echo "chaperon: scontrol show '$target' not allowed" >&2
+                    echo "sandbox: scontrol show '$target' is not allowed. Allowed targets: job, node, partition, config, step" >&2
                     return 1
                     ;;
             esac
@@ -164,7 +164,7 @@ handle_scontrol() {
         # ── Scoped job actions ──
         hold|release|requeue)
             if [[ ${#REQ_ARGS[@]} -lt 2 ]]; then
-                echo "chaperon: scontrol $subcmd requires a job ID" >&2
+                echo "sandbox: scontrol $subcmd requires a job ID." >&2
                 return 1
             fi
             local job_id="${REQ_ARGS[1]}"
@@ -179,12 +179,12 @@ handle_scontrol() {
         # ── Scoped job update ──
         update)
             if [[ ${#REQ_ARGS[@]} -lt 3 ]]; then
-                echo "chaperon: scontrol update requires 'job JOBID key=value...'" >&2
+                echo "sandbox: usage: scontrol update job <JOBID> <Key>=<Value> ..." >&2
                 return 1
             fi
             local update_target="${REQ_ARGS[1]}"
             if [[ "$update_target" != "job" && "$update_target" != "JobId" && "$update_target" != "jobid" ]]; then
-                echo "chaperon: scontrol update '$update_target' not allowed (only job updates)" >&2
+                echo "sandbox: scontrol update is only allowed for jobs (e.g., scontrol update job 12345 TimeLimit=2:00:00)." >&2
                 return 1
             fi
 
@@ -205,7 +205,7 @@ handle_scontrol() {
                     if _is_update_key_allowed "$key"; then
                         update_params+=("$param")
                     else
-                        echo "chaperon: scontrol update key '$key' not allowed" >&2
+                        echo "sandbox: scontrol update key '$key' is not allowed. Allowed keys: Comment, Deadline, Nice, Priority, TimeLimit, NumCPUs, NumNodes, Partition, QOS, etc." >&2
                         return 1
                     fi
                 fi
@@ -213,14 +213,14 @@ handle_scontrol() {
             done
 
             if [[ -z "$job_id" ]]; then
-                echo "chaperon: scontrol update requires a job ID" >&2
+                echo "sandbox: scontrol update requires a job ID." >&2
                 return 1
             fi
             if ! _validate_job_in_scope "$job_id" "$scope" "$project_dir"; then
                 return 1
             fi
             if [[ ${#update_params[@]} -eq 0 ]]; then
-                echo "chaperon: scontrol update requires at least one key=value pair" >&2
+                echo "sandbox: scontrol update requires at least one Key=Value pair (e.g., TimeLimit=2:00:00)." >&2
                 return 1
             fi
 
@@ -238,8 +238,7 @@ handle_scontrol() {
 
         # ── Everything else denied ──
         *)
-            echo "chaperon: scontrol '$subcmd' is not allowed inside the sandbox" >&2
-            echo "Hint: allowed subcommands: show, hold, release, requeue, update job" >&2
+            echo "sandbox: scontrol '$subcmd' is not allowed. Allowed: show, hold, release, requeue, update job" >&2
             return 1
             ;;
     esac

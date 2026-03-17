@@ -61,7 +61,7 @@ handle_scancel() {
 
     local real_scancel="${REAL_SCANCEL:-/usr/bin/scancel}"
     if [[ ! -x "$real_scancel" ]]; then
-        echo "chaperon: real scancel not found at $real_scancel" >&2
+        echo "sandbox: scancel binary not found at $real_scancel — is Slurm installed?" >&2
         return 1
     fi
 
@@ -77,14 +77,14 @@ handle_scancel() {
         case "$arg" in
             # Denied: scope is controlled by the chaperon
             -u|--user|--user=*|--me|--account|--account=*|--wckey|--wckey=*)
-                echo "chaperon: scancel flag '$arg' not allowed (scope controlled by chaperon)" >&2
+                echo "sandbox: scancel '$arg' is not allowed — job scope is controlled by the sandbox (CHAPERON_SCANCEL_SCOPE in sandbox.conf)." >&2
                 return 1
                 ;;
             --*=*)
                 if _is_scancel_allowed "$arg"; then
                     validated_flags+=("$arg")
                 else
-                    echo "chaperon: denied unknown scancel flag: ${arg%%=*}" >&2
+                    echo "sandbox: scancel flag '${arg%%=*}' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
@@ -96,7 +96,7 @@ handle_scancel() {
                         validated_flags+=("${REQ_ARGS[$i]}")
                     fi
                 else
-                    echo "chaperon: denied unknown scancel flag: $arg" >&2
+                    echo "sandbox: scancel flag '$arg' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
@@ -109,7 +109,7 @@ handle_scancel() {
                 if [[ "$arg" =~ ^[0-9]+(_[0-9]+)?$ ]]; then
                     requested_ids+=("$arg")
                 else
-                    echo "chaperon: invalid job ID: $arg" >&2
+                    echo "sandbox: '$arg' is not a valid job ID. Job IDs must be numeric (e.g., 12345 or 12345_0)." >&2
                     return 1
                 fi
                 ;;
@@ -143,9 +143,9 @@ handle_scancel() {
             fi
         done
         if "$any_exist"; then
-            echo "chaperon: scancel denied — requested job(s) not submitted by this $scope" >&2
+            echo "sandbox: cannot cancel — the requested job(s) were not submitted by this $scope. Only sandbox-submitted jobs can be cancelled." >&2
         else
-            echo "chaperon: no sandbox-submitted jobs found in queue" >&2
+            echo "sandbox: no sandbox-submitted jobs found in queue." >&2
         fi
         return 1
     fi
@@ -172,16 +172,16 @@ handle_scancel() {
             if "$matched"; then
                 final_ids+=("$req_id")
             else
-                echo "chaperon: scancel denied for job $req_id (not in $scope scope)" >&2
+                echo "sandbox: cannot cancel job $req_id — it was not submitted by this $scope." >&2
             fi
         done
     fi
 
     if [[ ${#final_ids[@]} -eq 0 ]]; then
         if [[ ${#requested_ids[@]} -gt 0 ]]; then
-            echo "chaperon: none of the requested jobs are in $scope scope" >&2
+            echo "sandbox: none of the requested jobs were submitted by this $scope." >&2
         else
-            echo "chaperon: no job IDs specified for scancel" >&2
+            echo "sandbox: scancel requires job IDs or 'all' to cancel all sandbox jobs." >&2
         fi
         return 1
     fi

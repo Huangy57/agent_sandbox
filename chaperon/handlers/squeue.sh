@@ -61,7 +61,7 @@ handle_squeue() {
 
     local real_squeue="${REAL_SQUEUE:-/usr/bin/squeue}"
     if [[ ! -x "$real_squeue" ]]; then
-        echo "chaperon: real squeue not found at $real_squeue" >&2
+        echo "sandbox: squeue binary not found at $real_squeue — is Slurm installed?" >&2
         return 1
     fi
 
@@ -75,14 +75,14 @@ handle_squeue() {
         case "$arg" in
             # Denied: scope is controlled by the chaperon
             -u|--user|--user=*|--me|--account|--account=*)
-                echo "chaperon: squeue flag '$arg' not allowed (scope controlled by chaperon)" >&2
+                echo "sandbox: squeue '$arg' is not allowed — the sandbox automatically shows only your sandbox-submitted jobs." >&2
                 return 1
                 ;;
             --*=*)
                 if _is_squeue_allowed "$arg"; then
                     validated_flags+=("$arg")
                 else
-                    echo "chaperon: denied unknown squeue flag: ${arg%%=*}" >&2
+                    echo "sandbox: squeue flag '${arg%%=*}' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
@@ -94,12 +94,12 @@ handle_squeue() {
                         validated_flags+=("${REQ_ARGS[$i]}")
                     fi
                 else
-                    echo "chaperon: denied unknown squeue flag: $arg" >&2
+                    echo "sandbox: squeue flag '$arg' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
             *)
-                echo "chaperon: invalid squeue argument: $arg" >&2
+                echo "sandbox: unexpected squeue argument: '$arg'" >&2
                 return 1
                 ;;
         esac

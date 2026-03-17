@@ -147,43 +147,43 @@ validate_sbatch_args() {
         local arg="${REQ_ARGS[$i]}"
         case "$arg" in
             --wrap|--wrap=*)
-                echo "chaperon: denied flag: --wrap (use protocol SCRIPT)" >&2
+                echo "sandbox: sbatch '--wrap' is handled automatically. Pass your script as a file argument or use --wrap normally." >&2
                 return 1
                 ;;
             --chdir|--chdir=*|-D)
-                echo "chaperon: denied flag: --chdir/-D (CWD from protocol)" >&2
+                echo "sandbox: sbatch '--chdir' is not allowed — the working directory is set automatically to your current directory." >&2
                 return 1
                 ;;
             --uid|--uid=*|--gid|--gid=*)
-                echo "chaperon: denied flag: --uid/--gid" >&2
+                echo "sandbox: sbatch '--uid/--gid' is not allowed — jobs must run as your own user." >&2
                 return 1
                 ;;
             --get-user-env|--get-user-env=*)
-                echo "chaperon: denied flag: --get-user-env" >&2
+                echo "sandbox: sbatch '--get-user-env' is not allowed — it can leak environment variables from outside the sandbox." >&2
                 return 1
                 ;;
             --propagate|--propagate=*)
-                echo "chaperon: denied flag: --propagate" >&2
+                echo "sandbox: sbatch '--propagate' is not allowed — resource limit propagation is restricted for security." >&2
                 return 1
                 ;;
             --export|--export=*)
-                echo "chaperon: denied flag: --export" >&2
+                echo "sandbox: sbatch '--export' is not allowed — environment variable injection could bypass sandbox restrictions." >&2
                 return 1
                 ;;
             --prolog|--prolog=*|--epilog|--epilog=*|--task-prolog|--task-prolog=*|--task-epilog|--task-epilog=*)
-                echo "chaperon: denied flag: --prolog/--epilog" >&2
+                echo "sandbox: sbatch '--prolog/--epilog' is not allowed — custom prolog/epilog scripts could run outside sandbox control." >&2
                 return 1
                 ;;
             --burst-buffer-file|--burst-buffer-file=*|--bbf|--bbf=*)
-                echo "chaperon: denied flag: --burst-buffer-file" >&2
+                echo "sandbox: sbatch '--burst-buffer-file' is not allowed — arbitrary file access is restricted." >&2
                 return 1
                 ;;
             --bcast|--bcast=*)
-                echo "chaperon: denied flag: --bcast" >&2
+                echo "sandbox: sbatch '--bcast' is not allowed — binary broadcasting could bypass sandbox wrapping." >&2
                 return 1
                 ;;
             --container|--container=*)
-                echo "chaperon: denied flag: --container (OCI containers bypass sandbox)" >&2
+                echo "sandbox: sbatch '--container' is not allowed — OCI containers would bypass sandbox restrictions." >&2
                 return 1
                 ;;
             --comment=*)
@@ -202,7 +202,7 @@ validate_sbatch_args() {
                 if _is_allowed_flag "$arg"; then
                     VALIDATED_ARGS+=("$arg")
                 else
-                    echo "chaperon: denied unknown flag: ${arg%%=*}" >&2
+                    echo "sandbox: sbatch flag '${arg%%=*}' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
@@ -214,12 +214,12 @@ validate_sbatch_args() {
                         VALIDATED_ARGS+=("${REQ_ARGS[$i]}")
                     fi
                 else
-                    echo "chaperon: denied unknown flag: $arg" >&2
+                    echo "sandbox: sbatch flag '$arg' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
             *)
-                echo "chaperon: denied positional argument: (use protocol SCRIPT)" >&2
+                echo "sandbox: sbatch unexpected positional argument. Script files are handled by the stub — this should not happen." >&2
                 return 1
                 ;;
         esac
@@ -238,18 +238,18 @@ validate_cwd() {
     # Resolve to physical path (no symlink tricks)
     local resolved
     resolved="$(cd "$cwd" 2>/dev/null && pwd -P)" || {
-        echo "chaperon: CWD does not exist: $cwd" >&2
+        echo "sandbox: working directory does not exist: $cwd" >&2
         return 1
     }
 
     local resolved_project
     resolved_project="$(cd "$project_dir" 2>/dev/null && pwd -P)" || {
-        echo "chaperon: project dir does not exist: $project_dir" >&2
+        echo "sandbox: project directory does not exist: $project_dir" >&2
         return 1
     }
 
     if [[ "$resolved" != "$resolved_project" && "$resolved" != "$resolved_project"/* ]]; then
-        echo "chaperon: CWD '$resolved' is not under project dir '$resolved_project'" >&2
+        echo "sandbox: working directory '$resolved' is outside the project directory '$resolved_project'. Jobs must run within the project." >&2
         return 1
     fi
     return 0
@@ -291,7 +291,7 @@ create_wrapped_script() {
     done <<< "$script_content"
 
     if [[ "$stripped_count" -gt 0 ]]; then
-        echo "chaperon: stripped $stripped_count unsafe #SBATCH directive(s) from script" >&2
+        echo "sandbox: stripped $stripped_count unsafe #SBATCH directive(s) from script (denied flags are not allowed in directives either)" >&2
     fi
 
     # Create a temp file for the original script (compute node needs it on NFS).
@@ -395,7 +395,7 @@ _get_scoped_jobs() {
             _query_chaperon_jobs "chaperon:"
             ;;
         *)
-            echo "chaperon: unknown scope: $scope" >&2
+            echo "sandbox: unknown CHAPERON_SCANCEL_SCOPE value: '$scope'. Valid values: session, project, user" >&2
             return 1
             ;;
     esac

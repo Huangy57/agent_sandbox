@@ -146,7 +146,7 @@ handle_srun() {
 
     local real_srun="${REAL_SRUN:-/usr/bin/srun}"
     if [[ ! -x "$real_srun" ]]; then
-        echo "chaperon: real srun not found at $real_srun" >&2
+        echo "sandbox: srun binary not found at $real_srun — is Slurm installed?" >&2
         return 1
     fi
 
@@ -183,53 +183,53 @@ handle_srun() {
         case "$arg" in
             # ── Always denied ──
             --pty)
-                echo "chaperon: srun --pty denied (no PTY passthrough in sandbox)" >&2
+                echo "sandbox: srun '--pty' is not allowed — interactive PTY sessions cannot be proxied through the sandbox. Use 'sbatch' for job submission or 'srun' without --pty." >&2
                 return 1
                 ;;
             --jobid|--jobid=*|-j)
-                echo "chaperon: srun flag '$arg' denied (cannot attach to arbitrary allocations)" >&2
+                echo "sandbox: srun '$arg' is not allowed — attaching to other jobs' allocations is restricted." >&2
                 return 1
                 ;;
             --uid|--uid=*|--gid|--gid=*)
-                echo "chaperon: srun flag '$arg' denied (cannot impersonate)" >&2
+                echo "sandbox: srun '$arg' is not allowed — jobs must run as your own user." >&2
                 return 1
                 ;;
             --export|--export=*)
-                echo "chaperon: srun flag '$arg' denied (env injection blocked)" >&2
+                echo "sandbox: srun '$arg' is not allowed — environment variable injection could bypass sandbox restrictions." >&2
                 return 1
                 ;;
             --chdir|--chdir=*|-D)
-                echo "chaperon: srun flag '$arg' denied (CWD controlled by sandbox)" >&2
+                echo "sandbox: srun '$arg' is not allowed — the working directory is set automatically." >&2
                 return 1
                 ;;
             --get-user-env|--get-user-env=*)
-                echo "chaperon: srun flag '$arg' denied (env leakage blocked)" >&2
+                echo "sandbox: srun '$arg' is not allowed — it can leak environment variables from outside the sandbox." >&2
                 return 1
                 ;;
             --propagate|--propagate=*)
-                echo "chaperon: srun flag '$arg' denied (rlimit propagation blocked)" >&2
+                echo "sandbox: srun '$arg' is not allowed — resource limit propagation is restricted." >&2
                 return 1
                 ;;
             --prolog|--prolog=*|--epilog|--epilog=*|--task-prolog|--task-prolog=*|--task-epilog|--task-epilog=*)
-                echo "chaperon: srun flag '$arg' denied (arbitrary script execution)" >&2
+                echo "sandbox: srun '$arg' is not allowed — custom prolog/epilog scripts could run outside sandbox control." >&2
                 return 1
                 ;;
             --bcast|--bcast=*)
-                echo "chaperon: srun flag '$arg' denied (binary broadcast blocked)" >&2
+                echo "sandbox: srun '$arg' is not allowed — binary broadcasting could bypass sandbox wrapping." >&2
                 return 1
                 ;;
             --container|--container=*)
-                echo "chaperon: srun flag '$arg' denied (OCI containers bypass sandbox)" >&2
+                echo "sandbox: srun '$arg' is not allowed — OCI containers would bypass sandbox restrictions." >&2
                 return 1
                 ;;
             --network|--network=*)
-                echo "chaperon: srun flag '$arg' denied (network namespace manipulation)" >&2
+                echo "sandbox: srun '$arg' is not allowed — network namespace manipulation is restricted." >&2
                 return 1
                 ;;
             # ── Allocation flags: allowed in alloc mode, denied in step mode ──
             -A|--account|--account=*|-p|--partition|--partition=*|-q|--qos|--qos=*|-t|--time|--time=*|--reservation|--reservation=*|-J|--job-name|--job-name=*|--begin|--begin=*|--deadline|--deadline=*|--constraint|--constraint=*|--nice|--nice=*|--priority|--priority=*|--signal|--signal=*|--wckey|--wckey=*|--comment|--comment=*)
                 if [[ "$mode" == "step" ]]; then
-                    echo "chaperon: srun flag '$arg' denied (allocation flags not allowed in step mode)" >&2
+                    echo "sandbox: srun '$arg' is not allowed in step mode — steps inherit the parent job's resources. Use these flags with sbatch instead." >&2
                     return 1
                 fi
                 validated_flags+=("$arg")
@@ -243,7 +243,7 @@ handle_srun() {
                 if _is_srun_allowed "$arg" "$mode"; then
                     validated_flags+=("$arg")
                 else
-                    echo "chaperon: srun denied unknown flag: ${arg%%=*}" >&2
+                    echo "sandbox: srun flag '${arg%%=*}' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
@@ -256,7 +256,7 @@ handle_srun() {
                         validated_flags+=("${REQ_ARGS[$i]}")
                     fi
                 else
-                    echo "chaperon: srun denied unknown flag: $arg" >&2
+                    echo "sandbox: srun flag '$arg' is not recognized. Only whitelisted flags are allowed inside the sandbox." >&2
                     return 1
                 fi
                 ;;
@@ -284,7 +284,7 @@ handle_srun() {
                 ;;
             esac
         done
-        echo "chaperon: srun requires a command to run" >&2
+        echo "sandbox: srun requires a command to run (e.g., srun -n 4 ./my_program)" >&2
         return 1
     fi
 
