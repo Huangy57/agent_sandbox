@@ -19,6 +19,41 @@ set -euo pipefail
 SKIP_TEST=false
 for arg in "$@"; do
     case "$arg" in
+        -h|--help)
+            cat <<'HELP'
+Usage: bash install.sh [OPTIONS]
+
+Options:
+  --no-test, --skip-test    Skip the post-install test suite
+  -h, --help                Show this help
+
+What this script does:
+  1. Detects available sandbox backends (bwrap, firejail, landlock)
+  2. Installs bubblewrap via Homebrew if needed (and available)
+  3. Copies all sandbox scripts to ~/.claude/sandbox/
+  4. Creates sandbox.conf if it doesn't exist (never overwrites yours)
+  5. Creates conf.d/ for per-project overrides
+  6. Installs agent instructions (sandbox-claude.md)
+  7. Runs a quick smoke test to verify everything works
+
+Files installed:
+  ~/.claude/sandbox/sandbox-exec.sh    Main entry point
+  ~/.claude/sandbox/sandbox.conf       Your permissions config
+  ~/.claude/sandbox/test.sh            Test suite
+  ~/.claude/sandbox/chaperon/          Slurm proxy (13 handlers, 19 stubs)
+  ~/.claude/sandbox/backends/          bwrap, firejail, landlock backends
+  ~/.claude/sandbox/bin/               PATH-shadowing fallback scripts
+
+Updating:
+  Re-run install.sh to update scripts. Your sandbox.conf is preserved.
+  Review new options:  diff ~/.claude/sandbox/sandbox.conf /path/to/repo/sandbox.conf
+
+Examples:
+  bash install.sh                # install + test
+  bash install.sh --no-test      # install only (faster)
+HELP
+            exit 0
+            ;;
         --no-test|--skip-test) SKIP_TEST=true ;;
     esac
 done

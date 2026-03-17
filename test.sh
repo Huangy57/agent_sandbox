@@ -31,6 +31,42 @@ QUICK_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            cat <<'HELP'
+Usage: bash test.sh [OPTIONS] [PROJECT_DIR]
+
+Options:
+  --quick           Run sections 1-5 only (~2s, no Slurm jobs submitted)
+  --full            Run all sections including Slurm job tests (default)
+  --verbose         Show command output on failure
+  --backend NAME    Test only one backend (bwrap, firejail, or landlock)
+  -h, --help        Show this help
+
+Sections:
+  1. Basic sandbox functionality (boot, env vars)
+  2. Filesystem isolation (~/.ssh, ~/.aws, ~/.gnupg hidden)
+  3. Environment variable blocking (GITHUB_PAT, API keys)
+  4. CLAUDE.md and settings.json overlays
+  5. Chaperon: Slurm proxy isolation and scoping
+  6. Chaperon functional tests (submits real Slurm jobs)
+  7. Security: escape vector tests
+  8. Security: syscall restrictions (seccomp)
+  9. Resource isolation
+ 10. Credential protection
+ 11. Sandbox self-protection
+ 12. Stability / stress tests
+
+The quick test (--quick) is safe to run anywhere — it never submits
+Slurm jobs or modifies state outside the sandbox.
+
+Examples:
+  bash test.sh --quick              # fast smoke test
+  bash test.sh --backend bwrap      # full test, bwrap only
+  bash test.sh --verbose            # full test, show failures
+  bash test.sh --quick /tmp/proj    # quick test with custom project dir
+HELP
+            exit 0
+            ;;
         --verbose) VERBOSE=true; shift ;;
         --backend) BACKEND_FLAG="$2"; shift 2 ;;
         --quick) QUICK_MODE=true; shift ;;
