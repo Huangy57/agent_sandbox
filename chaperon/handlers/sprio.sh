@@ -13,7 +13,6 @@ _SPRIO_ALLOWED_FLAGS=" \
   -l --long \
   -n --noheader \
   -o --format \
-  -u --user \
   -S --sort \
   -w --weights \
   -h --usage \
@@ -27,7 +26,6 @@ _SPRIO_ALLOWED_FLAGS=" \
 _SPRIO_VALUE_FLAGS=" \
   -j --jobs \
   -o --format \
-  -u --user \
   -S --sort \
 "
 

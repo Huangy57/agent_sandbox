@@ -270,9 +270,12 @@ create_wrapped_script() {
     local safe_directives=""
     local stripped_count=0
     while IFS= read -r line; do
-        if [[ "$line" == "#SBATCH"* ]]; then
+        # Normalize: strip leading whitespace/tabs before checking.
+        # Slurm accepts leading whitespace before #SBATCH directives.
+        local trimmed="${line#"${line%%[! 	]*}"}"
+        if [[ "$trimmed" == "#SBATCH"* ]]; then
             # Extract the flag from the directive
-            local directive_body="${line#\#SBATCH}"
+            local directive_body="${trimmed#\#SBATCH}"
             directive_body="${directive_body# }"  # strip leading space
             # Get the flag name (before = or space)
             local flag_name
@@ -298,7 +301,7 @@ create_wrapped_script() {
     # Strip #SBATCH directives from the script body — they'll be in the wrapper.
     local orig_script
     orig_script="$(mktemp "${TMPDIR:-/tmp}/chaperon-script-XXXXXX.sh")"
-    printf '%s\n' "$script_content" | grep -v '^#SBATCH' >> "$orig_script" || true
+    printf '%s\n' "$script_content" | grep -vE '^[[:space:]]*#SBATCH' >> "$orig_script" || true
     chmod +x "$orig_script"
 
     # Build wrapper with validated #SBATCH directives
@@ -356,9 +359,14 @@ _build_chaperon_comment() {
 
     local tag="chaperon:sid=${_CHAPERON_SESSION_ID},proj=${proj_hash}"
 
-    # Append user's original comment (percent-encode commas to stay parseable)
+    # Append user's original comment with encoding to prevent scope pollution.
+    # Encode commas (tag delimiter), colons (tag prefix), and equals signs
+    # (key=value separator) to prevent crafted comments from injecting
+    # fake chaperon:, sid=, or proj= patterns into the tag.
     if [[ -n "${_USER_COMMENT:-}" ]]; then
         local safe_comment="${_USER_COMMENT//,/%2C}"
+        safe_comment="${safe_comment//:/%3A}"
+        safe_comment="${safe_comment//=/%3D}"
         tag+=",user=${safe_comment}"
     fi
 
@@ -399,4 +407,53 @@ _get_scoped_jobs() {
             return 1
             ;;
     esac
+}
+
+# ── Validate that a single job ID is in scope ────────────────────
+# Uses a targeted squeue query instead of fetching all scoped jobs.
+# Shared by scontrol, sstat, and any handler that needs per-job validation.
+_validate_job_in_scope() {
+    local job_id="$1" scope="$2" project_dir="$3"
+
+    local base_id="${job_id%%_*}"
+    if [[ ! "$base_id" =~ ^[0-9]+$ ]]; then
+        echo "sandbox: '$job_id' is not a valid job ID." >&2
+        return 1
+    fi
+
+    # Query only this specific job's comment
+    local comment
+    comment="$(squeue -j "$base_id" --me -h -o "%k" 2>/dev/null)" || true
+
+    if [[ -z "$comment" ]]; then
+        echo "sandbox: job $job_id not found in queue or not owned by you." >&2
+        return 1
+    fi
+
+    # Check if the comment matches the scope.
+    # Match only in the tag prefix (before ,user=) to prevent injection
+    # via crafted user comments. Require delimiter after session ID to
+    # prevent prefix collisions (sid=123.100 vs sid=123.1000000).
+    local match=false
+    local tag_prefix="${comment%%,user=*}"
+    case "$scope" in
+        session)
+            [[ "$tag_prefix" == "chaperon:sid=${_CHAPERON_SESSION_ID},"* || \
+               "$tag_prefix" == "chaperon:sid=${_CHAPERON_SESSION_ID}" ]] && match=true
+            ;;
+        project)
+            local proj_hash
+            proj_hash="$(printf '%s' "$project_dir" | md5sum | cut -c1-12)"
+            [[ "$tag_prefix" == *"proj=${proj_hash}"* ]] && match=true
+            ;;
+        user)
+            [[ "$comment" == "chaperon:"* ]] && match=true
+            ;;
+    esac
+
+    if ! "$match"; then
+        echo "sandbox: job $job_id was not submitted by this $scope — cannot modify." >&2
+        return 1
+    fi
+    return 0
 }

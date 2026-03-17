@@ -21,9 +21,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/_handler_lib.sh"
 
 # ── Allowed update parameters ────────────────────────────────────
 # Only these JobId update keys are forwarded.  Security-sensitive keys
-# (e.g. UserId, GroupId, WorkDir, AdminComment) are denied.
+# are denied:
+#   Comment        — would strip/forge chaperon scope tag
+#   UserId/GroupId  — impersonation
+#   WorkDir        — escape project directory
+#   AdminComment   — admin-only field
+# Partition/QOS/Priority/ReservationName are allowed because all jobs
+# are wrapped in sandbox-exec.sh regardless of partition or priority.
 _SCONTROL_ALLOWED_UPDATE_KEYS=" \
-  Comment \
   Deadline \
   Nice \
   Priority \
@@ -47,49 +52,6 @@ _is_update_key_allowed() {
     [[ "$_SCONTROL_ALLOWED_UPDATE_KEYS" == *" $key "* ]]
 }
 
-# ── Validate that a single job ID is in scope ────────────────────
-# Uses a targeted squeue query instead of fetching all scoped jobs.
-_validate_job_in_scope() {
-    local job_id="$1" scope="$2" project_dir="$3"
-
-    local base_id="${job_id%%_*}"
-    if [[ ! "$base_id" =~ ^[0-9]+$ ]]; then
-        echo "sandbox: '$job_id' is not a valid job ID." >&2
-        return 1
-    fi
-
-    # Query only this specific job's comment
-    local comment
-    comment="$(squeue -j "$base_id" --me -h -o "%k" 2>/dev/null)" || true
-
-    if [[ -z "$comment" ]]; then
-        echo "sandbox: job $job_id not found in queue or not owned by you." >&2
-        return 1
-    fi
-
-    # Check if the comment matches the scope
-    local match=false
-    case "$scope" in
-        session)
-            [[ "$comment" == *"chaperon:sid=${_CHAPERON_SESSION_ID}"* ]] && match=true
-            ;;
-        project)
-            local proj_hash
-            proj_hash="$(printf '%s' "$project_dir" | md5sum | cut -c1-12)"
-            [[ "$comment" == *"proj=${proj_hash}"* ]] && match=true
-            ;;
-        user)
-            [[ "$comment" == *"chaperon:"* ]] && match=true
-            ;;
-    esac
-
-    if ! "$match"; then
-        echo "sandbox: job $job_id was not submitted by this $scope — cannot modify." >&2
-        return 1
-    fi
-    return 0
-}
-
 handle_scontrol() {
     local project_dir="$1"
     local sandbox_exec="$2"
@@ -107,7 +69,8 @@ handle_scontrol() {
         return 1
     fi
 
-    local subcmd="${REQ_ARGS[0]}"
+    # Lowercase for case-insensitive matching (scontrol accepts Show, SHOW, etc.)
+    local subcmd="${REQ_ARGS[0],,}"
 
     case "$subcmd" in
         # ── Read-only show commands ──
@@ -116,7 +79,7 @@ handle_scontrol() {
                 echo "sandbox: scontrol show requires a target: job, node, partition, config, step" >&2
                 return 1
             fi
-            local target="${REQ_ARGS[1]}"
+            local target="${REQ_ARGS[1],,}"
             case "$target" in
                 job|jobs)
                     # Show job — scoped to chaperon-submitted jobs

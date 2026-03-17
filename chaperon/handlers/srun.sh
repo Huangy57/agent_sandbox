@@ -288,6 +288,14 @@ handle_srun() {
         return 1
     fi
 
+    # In allocation mode, inject chaperon comment tag for job scoping
+    # (same as sbatch handler — enables scancel/squeue to find these jobs).
+    if [[ "$mode" == "alloc" ]]; then
+        local chaperon_comment
+        chaperon_comment="$(_build_chaperon_comment "$project_dir")"
+        validated_flags+=("--comment=$chaperon_comment")
+    fi
+
     local rc=0
 
     if [[ "$mode" == "step" ]]; then

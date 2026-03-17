@@ -106,10 +106,13 @@ handle_scancel() {
                 ;;
             *)
                 # Positional: should be a job ID (with optional array index)
-                if [[ "$arg" =~ ^[0-9]+(_[0-9]+)?$ ]]; then
+                # Accept: 12345, 12345_0, 12345_[0-10], 12345_0-10:2, etc.
+                # Validate the base job ID (before _) is numeric.
+                local base_id="${arg%%_*}"
+                if [[ "$base_id" =~ ^[0-9]+$ ]]; then
                     requested_ids+=("$arg")
                 else
-                    echo "sandbox: '$arg' is not a valid job ID. Job IDs must be numeric (e.g., 12345 or 12345_0)." >&2
+                    echo "sandbox: '$arg' is not a valid job ID. Job IDs must start with a number (e.g., 12345, 12345_0, 12345_[0-10])." >&2
                     return 1
                 fi
                 ;;
