@@ -140,8 +140,9 @@ handle_scancel() {
     if [[ -z "$allowed_jobs" ]] && ! "$cancel_all"; then
         # No chaperon jobs in queue — check if the requested IDs even exist
         local any_exist=false
+        local _real_squeue="${REAL_SQUEUE:-/usr/bin/squeue}"
         for req_id in "${requested_ids[@]}"; do
-            if squeue -j "$req_id" -h -o "%i" &>/dev/null; then
+            if timeout 10 "$_real_squeue" -j "$req_id" -h -o "%i" &>/dev/null; then
                 any_exist=true
                 break
             fi

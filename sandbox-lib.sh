@@ -146,7 +146,8 @@ SANDBOX_BYPASS_TOKEN=""
 
 BLOCKED_ENV_VARS=(
     "GITHUB_PAT" "GITHUB_TOKEN" "GH_TOKEN"
-    "OPENAI_API_KEY" "ANTHROPIC_API_KEY" "ZENODO_TOKEN" "HF_TOKEN"
+    "OPENAI_API_KEY" "ANTHROPIC_API_KEY"
+    "ZENODO_TOKEN" "HF_TOKEN"
     "AWS_ACCESS_KEY_ID" "AWS_SECRET_ACCESS_KEY" "AWS_SESSION_TOKEN"
     "ST_AUTH" "SW2_URL"
     "MUTT_EMAIL_ADDRESS" "MUTT_REALNAME" "MUTT_SMTP_URL"
@@ -204,7 +205,15 @@ if [[ "${SANDBOX_CONF:-}" != "" && "$SANDBOX_CONF" != "$_USER_DATA_DIR/sandbox.c
 elif [[ -f "$_ADMIN_DIR/sandbox.conf" ]]; then
     # Admin-installed: admin config is authoritative, user gets user.conf
     _ADMIN_CONF="$_ADMIN_DIR/sandbox.conf"
-    _USER_CONF="$_USER_DATA_DIR/user.conf"
+    if [[ -f "$_USER_DATA_DIR/user.conf" ]]; then
+        _USER_CONF="$_USER_DATA_DIR/user.conf"
+    elif [[ -f "$_USER_DATA_DIR/sandbox.conf" ]]; then
+        # Fallback: accept sandbox.conf as user config (common when users
+        # have customized sandbox.conf before admin install was deployed).
+        _USER_CONF="$_USER_DATA_DIR/sandbox.conf"
+    else
+        _USER_CONF="$_USER_DATA_DIR/user.conf"  # Expected path (will be missing)
+    fi
 else
     # User-only install: single config
     _USER_CONF="$_USER_DATA_DIR/sandbox.conf"
@@ -818,8 +827,9 @@ _detect_agents() {
         local agent_name
         agent_name="$(basename "$(dirname "$detect_script")")"
 
-        # Source detect.sh in a subshell to isolate side effects
-        if ( source "$detect_script" && agent_detect ) 2>/dev/null; then
+        # Source detect.sh in a subshell to isolate side effects.
+        # Timeout prevents a broken/malicious detect.sh from stalling startup.
+        if timeout 2 bash -c "source '$detect_script' && agent_detect" 2>/dev/null; then
             _DETECTED_AGENTS+=("$agent_name")
         fi
     done
@@ -897,19 +907,12 @@ _apply_agent_profiles() {
             fi
         fi
 
-        # --- Create stub directories for first-time usage ---
-        # Ensures agent config dirs exist even if the agent hasn't been
-        # configured yet, so the sandbox can mount them.
-        for _path in "${AGENT_HOME_WRITABLE[@]:-}"; do
-            [[ -n "$_path" ]] || continue
-            local _full="$HOME/$_path"
-            if [[ ! -e "$_full" ]]; then
-                # Only create directories (not files like .claude.json)
-                if [[ "$_path" != *.* ]] || [[ "$_path" == */* ]]; then
-                    mkdir -p "$_full" 2>/dev/null || true
-                fi
-            fi
-        done
+        # NOTE: We intentionally do NOT create stub directories for
+        # first-time usage. Creating dirs like ~/.config/opencode/ would
+        # cause the agent to be "detected" on subsequent runs even if
+        # it's not installed, which triggers env var unblocking from its
+        # env.conf (a security issue). The backends handle non-existent
+        # HOME_WRITABLE paths gracefully (they're skipped).
     done
 }
 

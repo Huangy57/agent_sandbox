@@ -240,7 +240,14 @@ backend_prepare() {
     # --- Blocked files ---
     for blocked in "${BLOCKED_FILES[@]}"; do
         if [[ -e "$blocked" ]]; then
+            # Resolve symlinks — firejail --blacklist may not follow them.
+            # Blocking both the symlink and its target ensures coverage.
             FIREJAIL_ARGS+=(--blacklist="$blocked")
+            if [[ -L "$blocked" ]]; then
+                local _resolved
+                _resolved="$(readlink -f "$blocked")"
+                [[ "$_resolved" != "$blocked" ]] && FIREJAIL_ARGS+=(--blacklist="$_resolved")
+            fi
         fi
     done
 

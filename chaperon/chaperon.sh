@@ -188,7 +188,12 @@ while true; do
     _ch_stderr="$(mktemp "${TMPDIR:-/tmp}/chaperon-err-XXXXXX")"
 
     _exit_code=0
-    dispatch_handler "$REQ_COMMAND" >"$_ch_stdout" 2>"$_ch_stderr" || _exit_code=$?
+    # Close the req FIFO FD for handler subprocesses to prevent:
+    #   1. Child processes (squeue, scancel, etc.) from inheriting FD 3
+    #   2. Potential hangs if a child holds the FIFO open
+    # We re-use READ_FD (3) for the main loop, so only close in the
+    # redirection context (child processes inherit the closed FD).
+    dispatch_handler "$REQ_COMMAND" 3>&- >"$_ch_stdout" 2>"$_ch_stderr" || _exit_code=$?
 
     _stdout_b64="$(chaperon_b64_encode < "$_ch_stdout")"
     _stderr_b64="$(chaperon_b64_encode < "$_ch_stderr")"

@@ -382,7 +382,8 @@ _build_chaperon_comment() {
 # Prints matching job IDs (one per line).
 _query_chaperon_jobs() {
     local pattern="$1"
-    squeue --me -h -o "%i %k" 2>/dev/null \
+    local _real_squeue="${REAL_SQUEUE:-/usr/bin/squeue}"
+    timeout 10 "$_real_squeue" --me -h -o "%i %k" 2>/dev/null \
         | grep -E "$pattern" \
         | awk '{print $1}' \
         || true
@@ -405,7 +406,8 @@ _get_scoped_jobs() {
             ;;
         user|none)
             # Both "user" and "none" return ALL jobs of the current user
-            squeue --me -h -o "%i" 2>/dev/null || true
+            local _real_squeue="${REAL_SQUEUE:-/usr/bin/squeue}"
+            timeout 10 "$_real_squeue" --me -h -o "%i" 2>/dev/null || true
             ;;
         *)
             echo "sandbox: unknown SLURM_SCOPE value: '$scope'. Valid values: session, project, user, none" >&2
@@ -427,8 +429,9 @@ _validate_job_in_scope() {
     fi
 
     # Query only this specific job's comment
+    local _real_squeue="${REAL_SQUEUE:-/usr/bin/squeue}"
     local comment
-    comment="$(squeue -j "$base_id" --me -h -o "%k" 2>/dev/null)" || true
+    comment="$(timeout 10 "$_real_squeue" -j "$base_id" --me -h -o "%k" 2>/dev/null)" || true
 
     if [[ -z "$comment" ]]; then
         echo "sandbox: job $job_id not found in queue or not owned by you." >&2
