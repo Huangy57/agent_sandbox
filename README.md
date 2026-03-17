@@ -1,10 +1,10 @@
-# Sandboxing Claude Code Agents on HPC
+# Sandboxing AI Coding Agents on HPC
 
 > **Disclaimer:** This sandbox is a best-effort, user-space isolation layer. It is **not** a security product and comes with **no guarantees**. It reduces the attack surface of AI coding agents on shared HPC systems, but it cannot prevent all possible bypasses — see the [Security Summary](#security-summary) and [Admin Hardening Options](ADMIN_HARDENING.md) for known limitations. Use at your own risk.
 
 ## Why Sandbox?
 
-AI coding agents like Claude Code are powerful — they read files, write code, run commands, and submit Slurm jobs on your behalf. But on a shared HPC system, your user account has access to a lot more than any single project needs:
+AI coding agents (Claude Code, Codex, Gemini, Aider, OpenCode, and others) are powerful — they read files, write code, run commands, and submit Slurm jobs on your behalf. But on a shared HPC system, your user account has access to a lot more than any single project needs:
 
 - **SSH keys** (`~/.ssh/`) — access to GitHub, remote servers, other clusters
 - **Cloud credentials** (`~/.aws/`, API tokens) — access to S3, cloud services
@@ -12,7 +12,6 @@ AI coding agents like Claude Code are powerful — they read files, write code, 
 - **All lab data** — including other people's projects, possibly clinical data
 - **Environment secrets** — `GITHUB_PAT`, `OPENAI_API_KEY`, etc.
 - **User enumeration & profile extraction** — LDAP/AD directories expose every user on the cluster (`getent passwd`, `finger`); an agent can extract real names, home directory paths, login history, and organizational structure for thousands of users
-- **Other users' data** — shared filesystems (NFS, Lustre) often have permissive group permissions; an agent with your credentials can read or modify files belonging to other lab members
 
 An agent working on one project shouldn't be able to read your SSH keys, exfiltrate API tokens, enumerate users on the cluster, or accidentally overwrite someone else's data. A **sandbox** restricts the agent to only what it needs.
 
@@ -26,7 +25,7 @@ Docker provides strong isolation but requires root and is unavailable on shared 
 | **Path consistency** | Scripts that reference NFS paths may break inside the container if mounts differ | All paths are identical inside and outside. |
 | **Software stack** | Must install tools inside the image, or map `/app` — versions may conflict | Directly uses `/app`, lmod, your Homebrew — everything just works. |
 | **Image maintenance** | Must rebuild images when tools change | Nothing to rebuild. |
-| **Starting Claude** | Must install and configure Claude Code inside each container image | `sandbox-exec.sh -- claude` — that's it. |
+| **Starting agents** | Must install and configure each agent inside each container image | `sandbox-exec.sh -- claude` — that's it. Works with any agent. |
 | **Slurm integration** | Either Slurm is inaccessible inside the container — making interactive agents on the login node pointless since they can't submit compute jobs — or jobs escape the container and run unsandboxed on compute nodes, defeating the isolation entirely | `sbatch`/`srun` are transparently wrapped so compute-node jobs inherit the same sandbox restrictions |
 
 The sandbox gives you **kernel-enforced filesystem isolation** with none of the path-mapping headaches. The agent sees the exact same filesystem as you, minus the secrets.
@@ -62,22 +61,25 @@ bash agent_sandbox/install.sh
 
 The installer:
 1. Installs `bubblewrap` via Homebrew (if not already available) and copies all three backend files (bwrap, firejail, landlock)
-2. Copies scripts to `~/.claude/sandbox/`
-3. Creates `~/.claude/sandbox/sandbox.conf` (your personal config — won't overwrite)
-4. Installs agent instructions (only visible inside the sandbox, your CLAUDE.md is not modified)
+2. Copies scripts to `~/.config/agent-sandbox/`
+3. Installs agent profiles (Claude, Codex, Gemini, Aider, OpenCode)
+4. Creates `~/.config/agent-sandbox/sandbox.conf` (your personal config — won't overwrite)
 5. Runs the test suite to verify everything works
 
 ### What Gets Installed
 
 ```
-~/.claude/sandbox/
+~/.config/agent-sandbox/
 ├── sandbox.conf          # ← Your permissions config — edit this
 ├── sandbox-lib.sh        # Core library (config loading, backend detection)
 ├── sandbox-exec.sh       # Main entry point (auto-selects backend)
-├── sbatch-sandbox.sh     # Legacy Slurm sbatch wrapper (compute-node wrapping)
-├── srun-sandbox.sh       # Legacy Slurm srun wrapper (compute-node wrapping)
-├── sandbox-claude.md     # Agent instructions (overlaid into CLAUDE.md inside sandbox)
 ├── test.sh               # Test suite
+├── agents/               # Agent profiles (auto-detected at sandbox start)
+│   ├── claude/           # Claude Code — merges CLAUDE.md + settings.json
+│   ├── codex/            # OpenAI Codex CLI — merges AGENTS.md, unblocks OPENAI_API_KEY
+│   ├── gemini/           # Google Gemini CLI — merges GEMINI.md, unblocks GOOGLE_API_KEY
+│   ├── aider/            # Aider — unblocks OPENAI_API_KEY, ANTHROPIC_API_KEY
+│   └── opencode/         # OpenCode — unblocks OPENAI_API_KEY, ANTHROPIC_API_KEY
 ├── backends/
 │   ├── bwrap.sh          # Bubblewrap backend (mount namespace isolation)
 │   ├── firejail.sh       # Firejail backend (setuid sandbox, namespaces + seccomp)
@@ -87,31 +89,9 @@ The installer:
 ├── chaperon/             # Secure Slurm proxy (see CHAPERON.md)
 │   ├── chaperon.sh       # Main loop (runs OUTSIDE sandbox)
 │   ├── protocol.sh       # CHAPERON/1 wire protocol primitives
-│   ├── handlers/
-│   │   ├── _handler_lib.sh  # Arg whitelisting, CWD validation, job wrapping
-│   │   ├── sbatch.sh     # Validates, wraps, submits via real sbatch
-│   │   ├── srun.sh       # Validates srun flags, wraps or execs real srun
-│   │   ├── scancel.sh    # Validates job scope, cancels via real scancel
-│   │   ├── squeue.sh     # Filters squeue output to scoped jobs
-│   │   ├── scontrol.sh   # Scoped scontrol: show, hold, release, update
-│   │   ├── sacct.sh      # User-scoped sacct (--allusers denied)
-│   │   ├── sacctmgr.sh   # Read-only cluster/QOS/TRES queries
-│   │   ├── sinfo.sh      # Read-only partition/node info
-│   │   ├── sstat.sh      # User-scoped job step statistics
-│   │   ├── sprio.sh      # User-scoped job priority factors
-│   │   ├── sshare.sh     # User-scoped fairshare data
-│   │   ├── sdiag.sh      # Read-only scheduler diagnostics
-│   │   ├── sreport.sh    # Blocked (user enumeration risk)
-│   │   └── blocked.sh    # Generic "command blocked" response
+│   ├── handlers/         # Request handlers (sbatch, srun, scancel, etc.)
 │   └── stubs/            # PATH-shadowing stubs (all talk to chaperon)
-│       ├── _stub_lib.sh  # Stub→chaperon communication library
-│       ├── sbatch, srun, scancel, squeue, scontrol
-│       ├── sacct, sacctmgr, sinfo, sstat, sprio, sshare, sdiag, sreport
-│       └── salloc, sattach, sbcast, scrontab, scrun, strigger  # blocked
 ├── bin/                  # Fallback PATH shadows (delegate to stubs)
-│   ├── sbatch, srun, scancel, squeue, scontrol, sacct, sacctmgr
-│   ├── sinfo, sstat, sprio, sshare, sdiag, sreport
-│   └── salloc, sattach, sbcast, scrontab, scrun, strigger, tmux
 ```
 
 ### Backends
@@ -152,34 +132,43 @@ bash test.sh --verbose   # show details on failure
 
 ## Quick Start
 
-### Start Claude Code in a Sandbox
+### Start an Agent in the Sandbox
 
 ```bash
 cd /path/to/my-project
-~/.claude/sandbox/sandbox-exec.sh -- claude
+
+# Claude Code
+~/.config/agent-sandbox/sandbox-exec.sh -- claude
+
+# OpenAI Codex
+~/.config/agent-sandbox/sandbox-exec.sh -- codex
+
+# Google Gemini
+~/.config/agent-sandbox/sandbox-exec.sh -- gemini
 
 # Or add an alias to .bashrc:
-# alias agent-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'
+# alias agent-sandbox='~/.config/agent-sandbox/sandbox-exec.sh --'
+# Then: agent-sandbox claude
 ```
 
-Claude starts in your project directory with full read access to the HPC but write access **only** to that directory. SSH keys, API tokens, and credentials are invisible.
+The agent starts in your project directory with full read access to the HPC but write access **only** to that directory. SSH keys, API tokens, and credentials are invisible. Agent profiles are auto-detected — if both Claude and Codex are installed, both profiles activate simultaneously (each gets its own writable paths and credential access).
 
 ### Verify the Sandbox
 
 ```bash
-~/.claude/sandbox/sandbox-exec.sh -- ls ~/.ssh        # → No such file / Permission denied
-~/.claude/sandbox/sandbox-exec.sh -- bash -c 'echo $GITHUB_PAT'  # → (empty)
-~/.claude/sandbox/sandbox-exec.sh -- squeue --me       # → works (Slurm accessible)
+~/.config/agent-sandbox/sandbox-exec.sh -- ls ~/.ssh        # → No such file / Permission denied
+~/.config/agent-sandbox/sandbox-exec.sh -- bash -c 'echo $GITHUB_PAT'  # → (empty)
+~/.config/agent-sandbox/sandbox-exec.sh -- squeue --me       # → works (Slurm accessible)
 ```
 
 ---
 
 ## Configuration
 
-All sandbox permissions are in **one file**: `~/.claude/sandbox/sandbox.conf`. Edit it to match your environment:
+All sandbox permissions are in **one file**: `~/.config/agent-sandbox/sandbox.conf`. Edit it to match your environment:
 
 ```bash
-$EDITOR ~/.claude/sandbox/sandbox.conf
+$EDITOR ~/.config/agent-sandbox/sandbox.conf
 ```
 
 Changes take effect the next time you start a sandbox — no reinstall needed.
@@ -231,7 +220,7 @@ These files are sourced after `sandbox.conf`, so `+=` appends to the global arra
 
 #### Sandbox Permissions (settings.json)
 
-The sandbox overlays `~/.claude/settings.json` to auto-allow tools (`Bash`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `NotebookEdit`) that are already restricted by the kernel-enforced filesystem isolation. Your existing rules (including `deny`) are preserved. Customize via `~/.claude/sandbox/sandbox-settings.json`.
+For Claude Code, the sandbox overlays `~/.claude/settings.json` to auto-allow tools (`Bash`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `NotebookEdit`) that are already restricted by the kernel-enforced filesystem isolation. Your existing rules (including `deny`) are preserved. Customize via `~/.config/agent-sandbox/agents/claude/settings.json`.
 
 ---
 
@@ -283,15 +272,30 @@ For the full architecture, protocol specification, and security analysis, see [C
 
 ---
 
-## Agent Awareness (CLAUDE.md)
+## Agent Profiles
 
-The sandbox injects instructions into the agent's `CLAUDE.md` **without modifying your actual file**. A per-session `~/.claude/sandbox-config/` directory is created with merged `CLAUDE.md` and `settings.json`; `CLAUDE_CONFIG_DIR` points there. Everything else in `~/.claude/` is symlinked through (sessions, tokens, etc.). The agent knows its write boundaries and which `sandbox.conf` settings to suggest changing if it needs blocked access. Customize via `~/.claude/sandbox/sandbox-claude.md`.
+The sandbox uses an auto-detection system to find installed agents and apply per-agent configurations. Each agent profile lives in `agents/<name>/` and contains:
+
+| File | Purpose |
+|------|---------|
+| `detect.sh` | Returns 0 if the agent is installed/configured |
+| `overlay.sh` | Config merging (e.g., CLAUDE.md + sandbox instructions) |
+| `agent.md` | Sandbox instructions injected into the agent's instruction file |
+| `home.conf` | Home directory paths (writable + readonly) |
+| `hide.conf` | Files to overlay with /dev/null (e.g., hide real CLAUDE.md) |
+| `env.conf` | Environment variables to unblock from the default blocklist |
+
+**How it works:** At sandbox start, all `agents/*/detect.sh` are scanned. Every matching profile's paths, hidden files, and env var unblocks are merged into the global sandbox config. Then each matching agent's `overlay.sh` runs to handle config file merging.
+
+**Credentials are isolated per-agent:** The base config blocks all API keys. Each agent's `env.conf` unblocks only what it needs — Claude uses OAuth (no env vars), Codex unblocks `OPENAI_API_KEY`, Gemini unblocks `GOOGLE_API_KEY`.
+
+Customize agent instructions via `~/.config/agent-sandbox/agents/<name>/agent.md`.
 
 ---
 
 ## Agent Teams / tmux (experimental)
 
-The outer tmux socket is blocked (escape risk). A nested tmux runs inside the sandbox with `Ctrl-a` prefix: `sandbox-exec.sh -- tmux new-session claude`. On kernels < 5.4, set `BIND_DEV_PTS=true` in `sandbox.conf` for pty allocation (see Known Limitations). Customize via `~/.claude/sandbox/sandbox-tmux.conf`.
+The outer tmux socket is blocked (escape risk). A nested tmux runs inside the sandbox with `Ctrl-a` prefix: `sandbox-exec.sh -- tmux new-session claude`. On kernels < 5.4, set `BIND_DEV_PTS=true` in `sandbox.conf` for pty allocation (see Known Limitations). Customize via `~/.config/agent-sandbox/sandbox-tmux.conf`.
 
 ---
 
@@ -325,7 +329,7 @@ This was caused by firejail's `/etc/passwd` filtering, which removes UIDs >= `UI
 By design, `sbatch` inside the sandbox goes through the chaperon proxy. If it fails, check that the chaperon started successfully (look for "chaperon:" prefixed errors in stderr). The munge socket is intentionally blocked inside the sandbox — Slurm authentication happens in the chaperon, which runs outside. If `sbatch` fails with authentication errors, ensure `/run/munge/munge.socket.2` exists on the host.
 
 ### "Read-only file system" when writing
-By design. Only `$SANDBOX_PROJECT_DIR` and `~/.claude/` are writable. If the agent needs to write somewhere else, either change `--project-dir` or add the path to `HOME_WRITABLE` in `sandbox.conf`.
+By design. Only `$SANDBOX_PROJECT_DIR` and agent-specific directories are writable. If the agent needs to write somewhere else, either change `--project-dir` or add the path to `HOME_WRITABLE` in `sandbox.conf`.
 
 ### Module commands don't work
 The sandbox passes through `BASH_ENV` (typically pointing to the lmod init script, e.g. `/app/lmod/lmod/init/bash`) which auto-initializes lmod in bash scripts. If `module` isn't available, check that `BASH_ENV` is set correctly for your site's lmod installation. For non-bash shells, source the appropriate lmod init file.
@@ -400,7 +404,7 @@ Sorted by perceived severity (security impact first, then operational issues).
 | **All** | `memfd_create` and `process_vm_readv/writev` not blocked by any backend (HPC compatibility). Docker's default seccomp profile makes the same trade-offs | Accepted trade-off. `memfd_create` needed by CUDA, PyTorch, JAX. `process_vm_readv/writev` needed by MPI (mitigated by PID namespace in bwrap/firejail). See [Admin Hardening](ADMIN_HARDENING.md) |
 | **bwrap** (`BIND_DEV_PTS=true`) | Host `/dev` exposure — required for tmux on kernels < 5.4. On kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals outside the sandbox | Default `false` (safe). Upgrade to kernel ≥ 5.4 to avoid the need, or ≥ 6.2 to disable TIOCSTI entirely |
 | **Landlock** | Host `/dev/pts/*` always visible (no mount namespace). On kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals — unlike bwrap, this is not opt-in | Kernel ≥ 6.2 disables TIOCSTI system-wide. Use bwrap or firejail for private `/dev` |
-| **All** | `~/.claude/` is writable (required for Claude to function — OAuth tokens, session state, settings). An agent in one project can read session transcripts from other projects under `~/.claude/projects/` | Inherent requirement — Claude cannot operate without write access to `~/.claude/`. Cross-project transcript access could be mitigated by per-project `~/.claude/` copies (adds setup complexity) |
+| **All** | Agent config directories (e.g., `~/.claude/`, `~/.codex/`) are writable (required for agents to function). An agent in one project can read session data from other projects | Inherent requirement — agents need write access to their config directories. Cross-project data access could be mitigated by per-project config copies |
 | **All** | `/dev/shm` is writable and shared (IPC namespace not isolated by default) — could be used for covert cross-sandbox communication | `firejail --ipc-namespace`, `bwrap --unshare-ipc` |
 | **Landlock** | User enumeration via LDAP/AD — `getent passwd` reveals all directory users | No mount namespace to overlay files or block sockets; set `FILTER_PASSWD=false` if LDAP lookups are needed |
 | **bwrap/Firejail** | `/tmp` isolated by default (`PRIVATE_TMP=true`) — breaks MPI shared-memory transport and NCCL inter-GPU sockets | Set `PRIVATE_TMP=false` in `sandbox.conf` for HPC multi-process workloads |

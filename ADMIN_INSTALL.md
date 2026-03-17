@@ -2,7 +2,7 @@
 
 An admin-owned installation solves two problems:
 
-1. **Config protection** — the admin config is tamper-proof (root-owned, outside the user's sandbox dir). The sandbox scripts are also root-owned at `/app/lib/agent-sandbox/`, and `~/.claude/sandbox/` contains only user data (config, Claude-specific files), not scripts. With bwrap/firejail the scripts are additionally read-only inside the sandbox via mount namespace.
+1. **Config protection** — the admin config is tamper-proof (root-owned, outside the user's sandbox dir). The sandbox scripts are also root-owned at `/app/lib/agent-sandbox/`, and `~/.config/agent-sandbox/` contains only user data (config, agent profiles), not scripts. With bwrap/firejail the scripts are additionally read-only inside the sandbox via mount namespace.
 2. **Policy enforcement** — the admin sets a security baseline that users cannot weaken. Users can customize within bounds (add data mounts, extra blocked paths) but cannot remove admin-enforced protections.
 
 ## Quick Setup
@@ -16,9 +16,9 @@ A secure admin installation has two parts: a **root-owned config** (tamper-proof
 sudo mkdir -p /app/lib/agent-sandbox
 sudo cp sandbox.conf sandbox-lib.sh sandbox-exec.sh \
       sbatch-sandbox.sh srun-sandbox.sh \
-      sandbox-claude.md sandbox-settings.json \
       /app/lib/agent-sandbox/
 sudo cp -r backends/ /app/lib/agent-sandbox/backends/
+sudo cp -r agents/ /app/lib/agent-sandbox/agents/
 sudo cp -r bin/ /app/lib/agent-sandbox/bin/
 sudo chown -R root:root /app/lib/agent-sandbox
 sudo chmod -R 755 /app/lib/agent-sandbox
@@ -36,16 +36,14 @@ Symlink the entry point into a managed PATH directory so users run the admin-own
 sudo ln -s /app/lib/agent-sandbox/sandbox-exec.sh /app/bin/sandbox-exec
 ```
 
-`sandbox-lib.sh` automatically creates `~/.claude/sandbox/` on first run and seeds it with Claude-specific files (`sandbox-claude.md`, `sandbox-settings.json`) from the admin install. Users customize policy by creating `user.conf` and `conf.d/*.conf` in their `~/.claude/sandbox/` directory. On each sandbox start, `prepare_config_dir()` builds a merged Claude config directory (`~/.claude/sandbox-config/`) from the user's real `~/.claude/` and these sandbox-specific files, then sets `CLAUDE_CONFIG_DIR` so Claude uses it.
-
-> **Claude-specific:** The `~/.claude/sandbox/` user data path, the config-dir merging (`prepare_config_dir()`), and the agent-awareness files (`sandbox-claude.md`, `sandbox-settings.json`) are the only Claude-specific aspects. The sandbox itself, the config hierarchy, and the admin installation are agent-agnostic.
+`sandbox-lib.sh` automatically creates `~/.config/agent-sandbox/` on first run. Users customize policy by creating `user.conf` and `conf.d/*.conf` in their `~/.config/agent-sandbox/` directory. On each sandbox start, the agent detection system (`_detect_agents()`) scans `agents/*/detect.sh` to find installed agents, and `_apply_agent_profiles()` merges per-agent paths, hidden files, and env var unblocks into the global config. Each agent's `overlay.sh` handles config merging (e.g., Claude's builds `~/.claude/sandbox-config/` with merged `CLAUDE.md` and `settings.json`).
 
 ### What this protects
 
 | Component | bwrap/firejail | Landlock |
 |---|---|---|
 | **Admin config** (`/app/lib/agent-sandbox/sandbox.conf`) | Protected (root-owned, enforced via subprocess isolation) | Protected (root-owned, enforced via subprocess isolation) |
-| **Sandbox scripts** (`sandbox-lib.sh`, backends/) | Protected (root-owned + read-only inside sandbox via mount namespace) | Protected (root-owned at `/app/lib/agent-sandbox/`). `~/.claude/sandbox/` contains only user data, not scripts. |
+| **Sandbox scripts** (`sandbox-lib.sh`, backends/) | Protected (root-owned + read-only inside sandbox via mount namespace) | Protected (root-owned at `/app/lib/agent-sandbox/`). `~/.config/agent-sandbox/` contains only user data, not scripts. |
 | **User config** (`user.conf`, `conf.d/`) | Cannot weaken admin policy (subprocess isolation + policy merge) | Cannot weaken admin policy (subprocess isolation + policy merge) |
 
 The admin path is set in `_ADMIN_DIR` in `sandbox-lib.sh` (not configurable via environment variable). To use a different path, change this single line. The Slurm enforcement scripts (`slurm-enforce/`) have their own `_ADMIN_CONF` variable at the top of each script for the same reason.
@@ -57,11 +55,11 @@ The sandbox loads config in layers, each adding to the previous:
 ```
 1. Defaults           (built into sandbox-lib.sh)
 2. Admin config       (/app/lib/agent-sandbox/sandbox.conf)  ← security baseline (if present)
-3. User config        (~/.claude/sandbox/user.conf)          ← additive customization
-4. Per-project config (~/.claude/sandbox/conf.d/*.conf)      ← project-specific additions
+3. User config        (~/.config/agent-sandbox/user.conf)          ← additive customization
+4. Per-project config (~/.config/agent-sandbox/conf.d/*.conf)      ← project-specific additions
 ```
 
-Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.claude/sandbox/`, identical to the user-only install (layers 2 and 3 collapse into one).
+Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.config/agent-sandbox/`, identical to the user-only install (layers 2 and 3 collapse into one).
 
 ### What users can customize
 
@@ -111,7 +109,7 @@ The admin `sandbox.conf` sets the security baseline. It uses the same format as 
 
 ```bash
 # sandbox.conf — Admin security baseline
-# Users can ADD to these arrays via ~/.claude/sandbox/user.conf
+# Users can ADD to these arrays via ~/.config/agent-sandbox/user.conf
 # but CANNOT remove entries set here.
 
 ALLOWED_PROJECT_PARENTS=(
@@ -151,8 +149,8 @@ HOME_READONLY=(
 )
 
 HOME_WRITABLE=(
-    ".claude"
-    ".claude.json"
+    # Agent-specific paths (e.g., .claude, .codex) are added
+    # automatically by agent profiles in agents/<name>/home.conf.
 )
 
 # Paths that must NEVER be writable — user EXTRA_WRITABLE_PATHS entries
@@ -184,10 +182,10 @@ FILTER_PASSWD=true
 
 ## Example User Config
 
-Users create `~/.claude/sandbox/user.conf` to add project-specific mounts and tools:
+Users create `~/.config/agent-sandbox/user.conf` to add project-specific mounts and tools:
 
 ```bash
-# ~/.claude/sandbox/user.conf — User customization
+# ~/.config/agent-sandbox/user.conf — User customization
 # Adds to admin baseline. Cannot remove admin-enforced entries.
 
 # Additional data I need
@@ -211,7 +209,7 @@ Note the `+=` syntax — this appends to the admin's arrays. Using `=()` to repl
 
 ## Per-Project Overrides
 
-Per-project configs in `~/.claude/sandbox/conf.d/*.conf` are user-controlled and subject to the same post-merge validation as `user.conf` (cannot remove admin-enforced entries).
+Per-project configs in `~/.config/agent-sandbox/conf.d/*.conf` are user-controlled and subject to the same post-merge validation as `user.conf` (cannot remove admin-enforced entries).
 
 Example — a project-specific config that conditionally activates based on project path:
 
@@ -382,7 +380,7 @@ If neither bwrap nor firejail is available (e.g. Ubuntu 24.04+ without an AppArm
 | No mount namespace | Blocked paths return EACCES instead of ENOENT; no file overlays (passwd filtering, Slurm binary relocation) |
 | No PID namespace | Host processes visible via `/proc`; agent can read `/proc/PID/environ` of same-UID processes |
 | No `/tmp` isolation | Shared host `/tmp` — cross-session data leakage possible |
-| No sandbox self-protection | In user-only install, scripts writable under `~/.claude/sandbox/`. Admin install avoids this — scripts are root-owned, `~/.claude/sandbox/` contains only user data. |
+| No sandbox self-protection | In user-only install, scripts writable under `~/.config/agent-sandbox/`. Admin install avoids this — scripts are root-owned, `~/.config/agent-sandbox/` contains only user data. |
 | Unix socket `connect()` not blocked | `systemd-run --user` escape viable (see below) |
 | User enumeration (LDAP) | Cannot overlay `/etc/passwd` or block NSS sockets |
 

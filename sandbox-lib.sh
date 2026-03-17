@@ -53,23 +53,13 @@ if [[ -z "$HOME" ]]; then
 fi
 export HOME
 
-# User data directory — user-owned config, Claude-specific files, temp data.
+# User data directory — user-owned config, temp data.
 # Separate from SANDBOX_DIR (script location) so that an admin-owned install
 # at e.g. /app/lib/agent-sandbox/ can coexist with per-user customization.
-# Claude-specific: this path and the files it contains (sandbox-claude.md,
-# sandbox-settings.json) are the only Claude-specific aspects of the sandbox.
-_USER_DATA_DIR="${HOME}/.claude/sandbox"
+# Agent-specific paths (e.g., .claude, .codex, .gemini) are managed by
+# agent profiles in agents/<name>/.
+_USER_DATA_DIR="${HOME}/.config/agent-sandbox"
 mkdir -p "$_USER_DATA_DIR"
-
-# Bootstrap: if running from an admin install, seed user data files that
-# don't exist yet (Claude-specific agent instructions and settings).
-# These are templates — the user can edit their copy without affecting
-# the admin install.
-for _seed_file in sandbox-claude.md sandbox-settings.json; do
-    if [[ -f "$SANDBOX_DIR/$_seed_file" && ! -f "$_USER_DATA_DIR/$_seed_file" ]]; then
-        cp "$SANDBOX_DIR/$_seed_file" "$_USER_DATA_DIR/$_seed_file"
-    fi
-done
 
 SANDBOX_CONF="${SANDBOX_CONF:-$_USER_DATA_DIR/sandbox.conf}"
 
@@ -92,18 +82,18 @@ HOME_READONLY=(
     ".dircolors"
     ".pythonrc"
     ".linuxbrew"
-    ".local"
+    ".local/bin"
+    ".local/share/jupyter"
     "micromamba"
     ".condarc"
     ".mambarc"
+    # Agent-specific paths are added automatically by agent profiles.
 )
 
 HOME_WRITABLE=(
-    ".claude"
-    ".claude.json"
-    ".local/state/claude"
-    ".local/share/claude"
-    ".cache"
+    ".cache/uv"
+    # Agent-specific paths (e.g., .claude, .codex, .gemini) are added
+    # automatically by agent profiles in agents/<name>/home.conf.
 )
 
 BLOCKED_FILES=()
@@ -668,16 +658,8 @@ for _critical_mount in /usr /lib /bin /sbin /etc; do
     fi
 done
 
-# Warn about critical HOME_WRITABLE entries required by Claude Code.
-for _critical_home in ".claude" ".claude.json"; do
-    _found=false
-    for _hw in "${HOME_WRITABLE[@]}"; do
-        if [[ "$_hw" == "$_critical_home" ]]; then _found=true; break; fi
-    done
-    if ! $_found; then
-        echo "WARNING: $HOME/$_critical_home is not in HOME_WRITABLE. Claude Code may not function correctly." >&2
-    fi
-done
+# Agent-specific HOME_WRITABLE entries are added automatically by
+# _apply_agent_profiles(). No hardcoded critical-path warnings needed.
 
 # Detect paths that appear in both HOME_READONLY and HOME_WRITABLE.
 # The writable mount wins (later bwrap arg overrides), which may
@@ -808,115 +790,144 @@ generate_filtered_passwd() {
     _FILTERED_NSSWITCH="$tmpdir/nsswitch.conf"
 }
 
-# ── Config directory overlay ──────────────────────────────────────
+# ── Agent detection and profile system ─────────────────────────────
 #
-# Creates a sandbox config directory with merged CLAUDE.md and
-# settings.json, then sets CLAUDE_CONFIG_DIR so Claude Code uses it
-# instead of the real config dir.  This is backend-independent and
-# eliminates in-place file swapping entirely.
+# Scans agents/*/detect.sh to find installed agents, then merges their
+# home.conf, hide.conf, and env.conf into the global sandbox arrays.
+# Each agent's overlay.sh handles config file merging (e.g., CLAUDE.md).
 #
-# Respects an existing CLAUDE_CONFIG_DIR (reads from it, places
-# sandbox-config/ inside it).
-#
-# Layout:  <config-dir>/sandbox-config/
-#            CLAUDE.md       — user's original + sandbox snippet
-#            settings.json   — user's settings + sandbox permissions
-#            *               — symlinks to everything else
-#
-# The directory is rebuilt on every sandbox start. Concurrent sandboxes
-# all write the same merged content, so a single shared dir is fine.
+# Data flow:
+#   _detect_agents()         — find which agents are installed
+#   _apply_agent_profiles()  — merge home/hide/env configs, create stub dirs
+#   prepare_agent_configs()  — run each agent's overlay.sh for config merging
 
-prepare_config_dir() {
-    # --- Determine the real config directory ---
-    # Honour an existing CLAUDE_CONFIG_DIR; default to ~/.claude
-    local real_claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+# Detected agent names (populated by _detect_agents)
+_DETECTED_AGENTS=()
 
-    local config_dir="$real_claude_dir/sandbox-config"
-    mkdir -p "$config_dir"
+# Environment exports collected from agent overlays
+_AGENT_ENV_EXPORTS=()
 
-    # --- Merge CLAUDE.md ---
-    local sandbox_snippet="$_USER_DATA_DIR/sandbox-claude.md"
-    local user_claude_md="$real_claude_dir/CLAUDE.md"
-    {
-        if [[ -f "$user_claude_md" ]]; then
-            # Strip any stale sandbox injection from a previous in-place backend
-            sed '/^# __SANDBOX_INJECTED_9f3a7c__$/,/^$/d' "$user_claude_md"
+# _detect_agents — scan agents/*/detect.sh, populate _DETECTED_AGENTS
+_detect_agents() {
+    _DETECTED_AGENTS=()
+    local agents_dir="$SANDBOX_DIR/agents"
+    [[ -d "$agents_dir" ]] || return 0
+
+    for detect_script in "$agents_dir"/*/detect.sh; do
+        [[ -f "$detect_script" ]] || continue
+        local agent_name
+        agent_name="$(basename "$(dirname "$detect_script")")"
+
+        # Source detect.sh in a subshell to isolate side effects
+        if ( source "$detect_script" && agent_detect ) 2>/dev/null; then
+            _DETECTED_AGENTS+=("$agent_name")
         fi
-        if [[ -f "$sandbox_snippet" ]]; then
-            cat "$sandbox_snippet"
-        fi
-    } > "$config_dir/CLAUDE.md"
-
-    # --- Merge settings.json ---
-    local sandbox_settings="$_USER_DATA_DIR/sandbox-settings.json"
-    local user_settings="$real_claude_dir/settings.json"
-
-    if [[ -f "$sandbox_settings" ]]; then
-        [[ -f "$user_settings" ]] || echo '{}' > "$user_settings"
-        python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        user = json.load(f)
-except (ValueError, IOError):
-    user = {}
-with open(sys.argv[2]) as f:
-    sandbox = json.load(f)
-user.setdefault('permissions', {})
-existing = user['permissions'].get('allow', [])
-for rule in sandbox.get('permissions', {}).get('allow', []):
-    if rule not in existing:
-        existing.append(rule)
-user['permissions']['allow'] = existing
-json.dump(user, sys.stdout, indent=2)
-" "$user_settings" "$sandbox_settings" > "$config_dir/settings.json"
-    elif [[ -f "$user_settings" ]]; then
-        cp "$user_settings" "$config_dir/settings.json"
-    fi
-
-    # --- Symlink everything else (preserve fresher sandbox copies) ---
-    # Claude Code refreshes tokens via write-to-temp + rename, which
-    # replaces our symlinks with real files.  Only overwrite with a
-    # symlink if the outside file is newer; otherwise keep the
-    # sandbox-config copy (e.g. a refreshed token from a prior session).
-    for item in "$real_claude_dir"/* "$real_claude_dir"/.*; do
-        local name
-        name="$(basename "$item")"
-        [[ "$name" == "." || "$name" == ".." ]] && continue
-        case "$name" in
-            CLAUDE.md|settings.json|sandbox-config) continue ;;
-        esac
-        [[ "$name" == *.sandbox-backup.* ]] && continue
-        local target="$config_dir/$name"
-        # If a real directory (not symlink) exists in sandbox-config,
-        # merge its contents into the real ~/.claude/<name> and replace
-        # with a symlink.  This recovers session data that was written
-        # to a stale copy instead of through a symlink.
-        # Skip bwrap bind-mounts (mountpoint) — can't replace those.
-        if [[ -d "$target" && ! -L "$target" ]]; then
-            if mountpoint -q "$target" 2>/dev/null; then
-                continue
-            fi
-            # Merge: copy contents into the real directory, skip duplicates
-            if [[ -d "$item" ]]; then
-                cp -rn "$target"/. "$item"/ 2>/dev/null || true
-            fi
-            rm -rf "$target"
-        fi
-        # If target is a real file (not a symlink) and newer than the
-        # outside version, keep it — it was refreshed inside the sandbox.
-        if [[ -e "$target" && ! -L "$target" && "$target" -nt "$item" ]]; then
-            continue
-        fi
-        # Skip if symlink already points to the correct target — avoids
-        # NFS write contention when concurrent SLURM tasks run this.
-        if [[ -L "$target" && "$(readlink "$target")" == "$item" ]]; then
-            continue
-        fi
-        ln -snf "$item" "$target" 2>/dev/null || true
     done
 
-    export CLAUDE_CONFIG_DIR="$config_dir"
+    if [[ ${#_DETECTED_AGENTS[@]} -gt 0 ]]; then
+        echo "sandbox: detected agents: ${_DETECTED_AGENTS[*]}" >&2
+    fi
+}
+
+# _apply_agent_profiles — merge home.conf, hide.conf, env.conf into globals
+_apply_agent_profiles() {
+    local agents_dir="$SANDBOX_DIR/agents"
+
+    for agent_name in "${_DETECTED_AGENTS[@]}"; do
+        local profile_dir="$agents_dir/$agent_name"
+
+        # --- home.conf: add writable/readonly paths ---
+        if [[ -f "$profile_dir/home.conf" ]]; then
+            local AGENT_HOME_WRITABLE=()
+            local AGENT_HOME_READONLY=()
+            # shellcheck disable=SC1090
+            source "$profile_dir/home.conf"
+
+            for _path in "${AGENT_HOME_WRITABLE[@]}"; do
+                # Avoid duplicates
+                local _dup=false
+                for _existing in "${HOME_WRITABLE[@]}"; do
+                    [[ "$_existing" == "$_path" ]] && { _dup=true; break; }
+                done
+                $_dup || HOME_WRITABLE+=("$_path")
+            done
+
+            for _path in "${AGENT_HOME_READONLY[@]}"; do
+                local _dup=false
+                for _existing in "${HOME_READONLY[@]}"; do
+                    [[ "$_existing" == "$_path" ]] && { _dup=true; break; }
+                done
+                $_dup || HOME_READONLY+=("$_path")
+            done
+        fi
+
+        # --- hide.conf: add files to BLOCKED_FILES ---
+        if [[ -f "$profile_dir/hide.conf" ]]; then
+            local AGENT_HIDE_FILES=()
+            # shellcheck disable=SC1090
+            source "$profile_dir/hide.conf"
+
+            for _file in "${AGENT_HIDE_FILES[@]}"; do
+                # Expand $HOME in the path
+                _file="${_file/\$HOME/$HOME}"
+                local _dup=false
+                for _existing in "${BLOCKED_FILES[@]}"; do
+                    [[ "$_existing" == "$_file" ]] && { _dup=true; break; }
+                done
+                $_dup || BLOCKED_FILES+=("$_file")
+            done
+        fi
+
+        # --- env.conf: remove vars from BLOCKED_ENV_VARS ---
+        if [[ -f "$profile_dir/env.conf" ]]; then
+            local AGENT_UNBLOCK_ENV_VARS=()
+            # shellcheck disable=SC1090
+            source "$profile_dir/env.conf"
+
+            if [[ ${#AGENT_UNBLOCK_ENV_VARS[@]} -gt 0 ]]; then
+                local _new_blocked=()
+                for _var in "${BLOCKED_ENV_VARS[@]}"; do
+                    local _unblock=false
+                    for _unblock_var in "${AGENT_UNBLOCK_ENV_VARS[@]}"; do
+                        [[ "$_var" == "$_unblock_var" ]] && { _unblock=true; break; }
+                    done
+                    $_unblock || _new_blocked+=("$_var")
+                done
+                BLOCKED_ENV_VARS=("${_new_blocked[@]}")
+            fi
+        fi
+
+        # --- Create stub directories for first-time usage ---
+        # Ensures agent config dirs exist even if the agent hasn't been
+        # configured yet, so the sandbox can mount them.
+        for _path in "${AGENT_HOME_WRITABLE[@]:-}"; do
+            [[ -n "$_path" ]] || continue
+            local _full="$HOME/$_path"
+            if [[ ! -e "$_full" ]]; then
+                # Only create directories (not files like .claude.json)
+                if [[ "$_path" != *.* ]] || [[ "$_path" == */* ]]; then
+                    mkdir -p "$_full" 2>/dev/null || true
+                fi
+            fi
+        done
+    done
+}
+
+# prepare_agent_configs PROJECT_DIR — run each agent's overlay.sh
+prepare_agent_configs() {
+    local project_dir="$1"
+    local agents_dir="$SANDBOX_DIR/agents"
+    _AGENT_ENV_EXPORTS=()
+
+    for agent_name in "${_DETECTED_AGENTS[@]}"; do
+        local overlay="$agents_dir/$agent_name/overlay.sh"
+        if [[ -f "$overlay" ]]; then
+            # Source overlay in current shell (needs access to globals)
+            # shellcheck disable=SC1090
+            source "$overlay"
+            agent_prepare_config "$project_dir"
+        fi
+    done
 }
 
 # ── Backend detection ───────────────────────────────────────────
@@ -1025,7 +1036,9 @@ build_bwrap_args() {
         detect_backend
         _BACKEND_DETECTED=true
     fi
-    prepare_config_dir
+    _detect_agents
+    _apply_agent_profiles
+    prepare_agent_configs "$1"
     backend_prepare "$1"
 }
 

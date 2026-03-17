@@ -73,7 +73,7 @@ done
 # because sandbox-exec.sh always sets up its own sandbox from scratch —
 # the env vars are informational, not part of the enforcement mechanism
 # (which is kernel-level: namespaces, Landlock rules, seccomp).
-unset SANDBOX_ACTIVE SANDBOX_BACKEND SANDBOX_PROJECT_DIR CLAUDE_CONFIG_DIR
+unset SANDBOX_ACTIVE SANDBOX_BACKEND SANDBOX_PROJECT_DIR
 
 # Apply backend override before sourcing sandbox-lib.sh
 if [[ -n "$BACKEND_OVERRIDE" ]]; then
@@ -114,8 +114,10 @@ fi
 detect_backend
 _BACKEND_DETECTED=true
 
-# Create per-session config directory (backend-independent)
-prepare_config_dir
+# Detect agents and apply profiles (backend-independent)
+_detect_agents
+_apply_agent_profiles
+prepare_agent_configs "$PROJECT_DIR"
 
 # ── Chaperon: create FIFO directory ───────────────────────────────
 # Create the FIFO directory BEFORE backend_prepare so backends can

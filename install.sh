@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# install.sh — Set up the sandbox for Claude Code
+# install.sh — Set up the sandbox for AI coding agents
 #
 # What this script does:
 #   1. Detects available sandbox backends (bwrap, firejail, landlock)
 #   2. Installs bubblewrap via Homebrew if needed (and available)
-#   3. Copies sandbox scripts to ~/.claude/sandbox/
-#   4. Creates a default sandbox.conf (won't overwrite yours)
-#   5. Installs sandbox-claude.md (agent instructions, only visible inside sandbox)
+#   3. Copies sandbox scripts to ~/.config/agent-sandbox/
+#   4. Installs agent profiles (Claude, Codex, Gemini, Aider, OpenCode)
+#   5. Creates a default sandbox.conf (won't overwrite yours)
 #   6. Runs the test suite to verify everything works
 #
 # Usage:
@@ -30,23 +30,24 @@ Options:
 What this script does:
   1. Detects available sandbox backends (bwrap, firejail, landlock)
   2. Installs bubblewrap via Homebrew if needed (and available)
-  3. Copies all sandbox scripts to ~/.claude/sandbox/
-  4. Creates sandbox.conf if it doesn't exist (never overwrites yours)
-  5. Creates conf.d/ for per-project overrides
-  6. Installs agent instructions (sandbox-claude.md)
+  3. Copies all sandbox scripts to ~/.config/agent-sandbox/
+  4. Installs agent profiles (Claude, Codex, Gemini, Aider, OpenCode)
+  5. Creates sandbox.conf if it doesn't exist (never overwrites yours)
+  6. Creates conf.d/ for per-project overrides
   7. Runs a quick smoke test to verify everything works
 
 Files installed:
-  ~/.claude/sandbox/sandbox-exec.sh    Main entry point
-  ~/.claude/sandbox/sandbox.conf       Your permissions config
-  ~/.claude/sandbox/test.sh            Test suite
-  ~/.claude/sandbox/chaperon/          Slurm proxy (13 handlers, 19 stubs)
-  ~/.claude/sandbox/backends/          bwrap, firejail, landlock backends
-  ~/.claude/sandbox/bin/               PATH-shadowing fallback scripts
+  ~/.config/agent-sandbox/sandbox-exec.sh    Main entry point
+  ~/.config/agent-sandbox/sandbox.conf       Your permissions config
+  ~/.config/agent-sandbox/test.sh            Test suite
+  ~/.config/agent-sandbox/agents/            Agent profiles (auto-detected)
+  ~/.config/agent-sandbox/chaperon/          Slurm proxy (13 handlers, 19 stubs)
+  ~/.config/agent-sandbox/backends/          bwrap, firejail, landlock backends
+  ~/.config/agent-sandbox/bin/               PATH-shadowing fallback scripts
 
 Updating:
   Re-run install.sh to update scripts. Your sandbox.conf is preserved.
-  Review new options:  diff ~/.claude/sandbox/sandbox.conf /path/to/repo/sandbox.conf
+  Review new options:  diff ~/.config/agent-sandbox/sandbox.conf /path/to/repo/sandbox.conf
 
 Examples:
   bash install.sh                # install + test
@@ -59,7 +60,7 @@ HELP
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SANDBOX_DIR="$HOME/.claude/sandbox"
+SANDBOX_DIR="$HOME/.config/agent-sandbox"
 
 echo "╔═══════════════════════════════════════════════╗"
 echo "║  Sandbox Installer                            ║"
@@ -161,7 +162,7 @@ mkdir -p "$SANDBOX_DIR/chaperon/handlers"
 mkdir -p "$SANDBOX_DIR/chaperon/stubs"
 mkdir -p "$SANDBOX_DIR/conf.d"
 
-for file in sandbox-lib.sh sandbox-exec.sh sbatch-sandbox.sh srun-sandbox.sh sandbox-claude.md sandbox-settings.json sandbox-tmux.conf test.sh; do
+for file in sandbox-lib.sh sandbox-exec.sh sbatch-sandbox.sh srun-sandbox.sh sandbox-tmux.conf test.sh; do
     cp "$SCRIPT_DIR/$file" "$SANDBOX_DIR/$file"
 done
 
@@ -172,6 +173,20 @@ done
 for file in bwrap.sh firejail.sh landlock.sh landlock-sandbox.py generate-seccomp.py; do
     cp "$SCRIPT_DIR/backends/$file" "$SANDBOX_DIR/backends/$file"
 done
+
+# Agent profiles
+if [[ -d "$SCRIPT_DIR/agents" ]]; then
+    for agent_dir in "$SCRIPT_DIR"/agents/*/; do
+        [[ -d "$agent_dir" ]] || continue
+        local_agent="$(basename "$agent_dir")"
+        mkdir -p "$SANDBOX_DIR/agents/$local_agent"
+        for file in "$agent_dir"*; do
+            [[ -f "$file" ]] || continue
+            cp "$file" "$SANDBOX_DIR/agents/$local_agent/"
+        done
+    done
+    echo "  ✓ Agent profiles installed ($(ls -d "$SANDBOX_DIR"/agents/*/ 2>/dev/null | wc -l) agents)"
+fi
 
 # Chaperon: secure Slurm proxy
 for file in chaperon.sh protocol.sh; do
@@ -217,9 +232,9 @@ fi
 
 # ── Step 4: Agent awareness ─────────────────────────────────────
 
-echo "  ✓ Agent instructions installed (sandbox-claude.md)"
-echo "    Only visible to the agent when running inside the sandbox."
-echo "    Edit $SANDBOX_DIR/sandbox-claude.md to customize."
+echo "  ✓ Agent profiles installed (auto-detected at sandbox start)"
+echo "    Profiles: $(ls "$SANDBOX_DIR/agents/" 2>/dev/null | tr '\n' ' ')"
+echo "    Edit agent instructions: $SANDBOX_DIR/agents/<name>/agent.md"
 
 # ── Step 5: Test suite ─────────────────────────────────────────
 
@@ -244,7 +259,7 @@ fi
 
 # ── Step 6: Suggest shell alias ───────────────────────────────────
 
-ALIAS_LINE="alias agent-sandbox='~/.claude/sandbox/sandbox-exec.sh -- claude'"
+ALIAS_LINE="alias agent-sandbox='~/.config/agent-sandbox/sandbox-exec.sh --'"
 ALIAS_ALREADY=false
 
 for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.dotfiles/.bashrc" "$HOME/.dotfiles/.zshrc"; do
@@ -258,12 +273,14 @@ echo ""
 echo "════════════════════════════════════════════════"
 echo "  Installation complete! (backends: ${AVAILABLE_BACKENDS[*]})"
 echo ""
-echo "  Start Claude Code in a sandbox:"
+echo "  Start an agent in the sandbox:"
 echo "    cd /your/project/dir"
-echo "    ~/.claude/sandbox/sandbox-exec.sh -- claude"
+echo "    ~/.config/agent-sandbox/sandbox-exec.sh -- claude"
+echo "    ~/.config/agent-sandbox/sandbox-exec.sh -- codex"
+echo "    ~/.config/agent-sandbox/sandbox-exec.sh -- gemini"
 echo ""
 echo "  Customize permissions:"
-echo "    \$EDITOR ~/.claude/sandbox/sandbox.conf"
+echo "    \$EDITOR ~/.config/agent-sandbox/sandbox.conf"
 
 if [[ "$ALIAS_ALREADY" == false ]]; then
     echo ""
@@ -273,6 +290,6 @@ if [[ "$ALIAS_ALREADY" == false ]]; then
     echo ""
     echo "    $ALIAS_LINE"
     echo ""
-    echo "  Then you can just run:  agent-sandbox"
+    echo "  Then you can just run:  agent-sandbox claude"
 fi
 echo "════════════════════════════════════════════════"

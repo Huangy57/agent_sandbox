@@ -23,8 +23,7 @@
 #     operations but not AF_UNIX socket connections. If systemd user
 #     instances are running, systemd-run --user can escape the sandbox.
 #     See ADMIN_HARDENING.md §0 for the fix (disable user@.service).
-#   - CLAUDE.md/settings.json merging handled by prepare_config_dir() in
-#     sandbox-lib.sh (CLAUDE_CONFIG_DIR per-session directory)
+#   - Agent config merging handled by prepare_agent_configs() in sandbox-lib.sh
 #   - Environment filtering done in shell (not via bwrap --unsetenv/--setenv)
 
 LANDLOCK_SANDBOX="$SANDBOX_DIR/backends/landlock-sandbox.py"
@@ -45,8 +44,7 @@ backend_prepare() {
     local project_dir="$1"
     _LANDLOCK_PROJECT_DIR="$project_dir"
 
-    # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
-    # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
+    # Agent config overlays are handled by prepare_agent_configs() in sandbox-lib.sh.
 
     # --- Build landlock-sandbox.py arguments ---
     LANDLOCK_ARGS=()
@@ -106,6 +104,11 @@ backend_prepare() {
     while IFS='=' read -r name _; do
         [[ "$name" == SSH_* ]] && unset "$name" 2>/dev/null || true
     done < <(env)
+
+    # Agent-specific environment exports (e.g., CLAUDE_CONFIG_DIR)
+    for _agent_export in "${_AGENT_ENV_EXPORTS[@]}"; do
+        export "$_agent_export"
+    done
 
     # Set sandbox env vars
     export SANDBOX_ACTIVE=1

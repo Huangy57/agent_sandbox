@@ -43,9 +43,8 @@
 #     Note: firejail 0.9.72 seccomp is broken on aarch64 (filter loads but
 #     doesn't block). Works correctly on x86_64.
 #
-# CLAUDE.md/settings.json: handled by prepare_config_dir() in sandbox-lib.sh.
-#   CLAUDE_CONFIG_DIR points to a per-session directory with merged config,
-#   so the user's real ~/.claude/ is never modified.
+# Agent config merging (e.g., CLAUDE.md/settings.json) is handled by
+# agent profiles via prepare_agent_configs() in sandbox-lib.sh.
 
 # ── Backend interface ────────────────────────────────────────────
 
@@ -64,8 +63,7 @@ backend_prepare() {
     local project_dir="$1"
     _FIREJAIL_PROJECT_DIR="$project_dir"
 
-    # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
-    # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
+    # Agent config overlays are handled by prepare_agent_configs() in sandbox-lib.sh.
 
     # --- Build firejail arguments ---
     FIREJAIL_ARGS=(
@@ -236,11 +234,8 @@ backend_prepare() {
         fi
     done
 
-    # Hide the real CLAUDE.md entirely — the agent should only see the
-    # merged sandbox-config copy (via CLAUDE_CONFIG_DIR).
-    if [[ -e "$HOME/.claude/CLAUDE.md" ]]; then
-        FIREJAIL_ARGS+=(--blacklist="$HOME/.claude/CLAUDE.md")
-    fi
+    # Agent-specific file hiding (e.g., CLAUDE.md, AGENTS.md) is handled
+    # by BLOCKED_FILES, populated from agents/*/hide.conf by _apply_agent_profiles().
 
     # --- Blocked files ---
     for blocked in "${BLOCKED_FILES[@]}"; do
@@ -272,6 +267,11 @@ backend_prepare() {
     while IFS='=' read -r name _; do
         [[ "$name" == SSH_* ]] && unset "$name" 2>/dev/null || true
     done < <(env)
+
+    # Agent-specific environment exports (e.g., CLAUDE_CONFIG_DIR)
+    for _agent_export in "${_AGENT_ENV_EXPORTS[@]}"; do
+        export "$_agent_export"
+    done
 
     # Set sandbox env vars
     export SANDBOX_ACTIVE=1

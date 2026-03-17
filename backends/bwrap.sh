@@ -110,17 +110,8 @@ backend_prepare() {
 
     BWRAP_ARGS+=(--remount-ro "$HOME")
 
-    # CLAUDE.md and settings.json overlays are handled by prepare_config_dir()
-    # in sandbox-lib.sh (sets CLAUDE_CONFIG_DIR to a per-session directory).
-    # Hide the real CLAUDE.md entirely — the agent should only see the
-    # merged sandbox-config copy (via CLAUDE_CONFIG_DIR).  Hiding it
-    # prevents persistence attacks.  Resolve symlinks because bwrap
-    # can't bind-mount over a symlink target.
-    local _real_claude_md="$HOME/.claude/CLAUDE.md"
-    if [[ -e "$_real_claude_md" ]]; then
-        _real_claude_md="$(readlink -f "$_real_claude_md")"
-        BWRAP_ARGS+=(--ro-bind /dev/null "$_real_claude_md")
-    fi
+    # Agent-specific file hiding (e.g., CLAUDE.md, AGENTS.md) is handled
+    # by BLOCKED_FILES, populated from agents/*/hide.conf by _apply_agent_profiles().
 
     for blocked in "${BLOCKED_FILES[@]}"; do
         if [[ -e "$blocked" ]]; then
@@ -254,6 +245,14 @@ backend_prepare() {
         BWRAP_ARGS+=(--setenv _CHAPERON_FIFO_DIR "$_CHAPERON_FIFO_DIR")
     fi
 
+
+    # Agent-specific environment exports (e.g., CLAUDE_CONFIG_DIR)
+    for _agent_export in "${_AGENT_ENV_EXPORTS[@]}"; do
+        local _key="${_agent_export%%=*}"
+        local _val="${_agent_export#*=}"
+        BWRAP_ARGS+=(--setenv "$_key" "$_val")
+        export "$_key=$_val"
+    done
 
     for var in "${BLOCKED_ENV_VARS[@]}"; do
         BWRAP_ARGS+=(--unsetenv "$var")
