@@ -1,0 +1,12 @@
+#!/bin/bash --
+# chaperon/stubs/salloc — Chaperon-proxied salloc stub
+#
+# Blocked: creates interactive allocations with a shell that cannot be safely proxied.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call salloc "$@"
+exit $?

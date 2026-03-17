@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/sstat — Chaperon-proxied sstat stub
+#
+# Proxies sstat through the chaperon, which validates job step IDs
+# are in scope before passing through to the real sstat binary.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call sstat "$@"
+exit $?

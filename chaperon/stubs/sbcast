@@ -1,0 +1,12 @@
+#!/bin/bash --
+# chaperon/stubs/sbcast — Chaperon-proxied sbcast stub
+#
+# Blocked: broadcasts files to compute nodes, bypassing sandbox file restrictions.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call sbcast "$@"
+exit $?

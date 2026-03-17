@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/sdiag — Chaperon-proxied sdiag stub
+#
+# Proxies sdiag through the chaperon, which validates flags
+# before passing through to the real sdiag.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call sdiag "$@"
+exit $?

@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/sshare — Chaperon-proxied sshare stub
+#
+# Proxies sshare through the chaperon, which scopes output to
+# the current user's fairshare data only.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call sshare "$@"
+exit $?

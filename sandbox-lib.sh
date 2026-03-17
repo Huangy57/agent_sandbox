@@ -40,14 +40,7 @@ _build_chaperon_blocked_binaries() {
             CHAPERON_BLOCKED_BINARIES+=("$name")
         done
     fi
-    # Always block these even without stubs (defense in depth)
-    for bin in salloc sattach; do
-        local found=false
-        for existing in "${CHAPERON_BLOCKED_BINARIES[@]}"; do
-            [[ "$existing" == "$bin" ]] && found=true && break
-        done
-        "$found" || CHAPERON_BLOCKED_BINARIES+=("$bin")
-    done
+    # salloc and sattach now have proper stubs and are picked up automatically above.
 }
 
 # Resolve HOME from the password database, not the environment variable.

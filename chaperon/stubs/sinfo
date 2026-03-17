@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/sinfo — Chaperon-proxied sinfo stub
+#
+# Proxies sinfo through the chaperon, which validates flags
+# before passing through to the real sinfo binary.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call sinfo "$@"
+exit $?

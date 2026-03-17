@@ -1,0 +1,12 @@
+#!/bin/bash --
+# chaperon/stubs/scrun — Chaperon-proxied scrun stub
+#
+# Blocked: OCI container job launcher that bypasses the sandbox entirely.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call scrun "$@"
+exit $?

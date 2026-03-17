@@ -1,0 +1,12 @@
+#!/bin/bash --
+# chaperon/stubs/scrontab — Chaperon-proxied scrontab stub
+#
+# Blocked: manages Slurm cron jobs that could schedule unsandboxed recurring work.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call scrontab "$@"
+exit $?

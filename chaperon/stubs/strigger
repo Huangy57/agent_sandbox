@@ -1,0 +1,12 @@
+#!/bin/bash --
+# chaperon/stubs/strigger — Chaperon-proxied strigger stub
+#
+# Blocked: sets event triggers that can execute arbitrary commands on Slurm events.
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call strigger "$@"
+exit $?

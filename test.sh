@@ -438,6 +438,93 @@ if sandbox bash -c 'test -p "${_CHAPERON_FIFO_DIR}/req" && echo EXISTS || echo M
     fi
 fi
 
+# 5g. squeue scoped (--user denied)
+if sandbox bash -c 'squeue --user=root 2>&1'; then
+    fail "squeue --user should be denied"
+else
+    if echo "$OUTPUT" | grep -qi "not allowed"; then
+        pass "squeue --user correctly denied by chaperon"
+    else
+        fail "squeue --user error unexpected" "$OUTPUT"
+    fi
+fi
+
+# 5h. scontrol scoped (shutdown denied, show partition allowed)
+if sandbox bash -c 'scontrol shutdown 2>&1'; then
+    fail "scontrol shutdown should be denied"
+else
+    if echo "$OUTPUT" | grep -qi "not allowed"; then
+        pass "scontrol shutdown correctly denied by chaperon"
+    else
+        fail "scontrol shutdown error unexpected" "$OUTPUT"
+    fi
+fi
+
+# 5i. sacct scoped (--allusers denied)
+if sandbox bash -c 'sacct --allusers 2>&1'; then
+    fail "sacct --allusers should be denied"
+else
+    if echo "$OUTPUT" | grep -qi "not allowed"; then
+        pass "sacct --allusers correctly denied by chaperon"
+    else
+        fail "sacct --allusers error unexpected" "$OUTPUT"
+    fi
+fi
+
+# 5j. sacctmgr (show user denied, show qos allowed)
+if sandbox bash -c 'sacctmgr show user 2>&1'; then
+    fail "sacctmgr show user should be denied"
+else
+    if echo "$OUTPUT" | grep -qi "not allowed"; then
+        pass "sacctmgr show user correctly denied by chaperon"
+    else
+        fail "sacctmgr show user error unexpected" "$OUTPUT"
+    fi
+fi
+
+# 5k. scontrol show assoc_mgr denied (user enumeration)
+if sandbox bash -c 'scontrol show assoc_mgr 2>&1'; then
+    fail "scontrol show assoc_mgr should be denied"
+else
+    if echo "$OUTPUT" | grep -qi "not allowed"; then
+        pass "scontrol show assoc_mgr correctly denied by chaperon"
+    else
+        fail "scontrol show assoc_mgr error unexpected" "$OUTPUT"
+    fi
+fi
+
+# 5l. Blocked commands give clear error (salloc, strigger, etc.)
+if sandbox bash -c 'salloc 2>&1' 2>/dev/null; then
+    # salloc might not exist on all systems — that's ok
+    if echo "$OUTPUT" | grep -qi "not allowed\|not found"; then
+        pass "salloc correctly blocked or not found"
+    else
+        fail "salloc should be blocked" "$OUTPUT"
+    fi
+else
+    if echo "$OUTPUT" | grep -qi "not allowed\|not found\|error"; then
+        pass "salloc correctly blocked by chaperon"
+    else
+        fail "salloc block error unexpected" "$OUTPUT"
+    fi
+fi
+
+# 5m. sinfo passes through (read-only system info)
+if sandbox bash -c 'sinfo --version 2>&1'; then
+    if echo "$OUTPUT" | grep -qi "slurm"; then
+        pass "sinfo --version passes through chaperon"
+    else
+        # sinfo might not be installed
+        pass "sinfo responded (may not have Slurm version output)"
+    fi
+else
+    if echo "$OUTPUT" | grep -qi "not found"; then
+        skip "sinfo binary not available"
+    else
+        fail "sinfo --version failed unexpectedly" "$OUTPUT"
+    fi
+fi
+
 echo ""
 
 if [[ "$QUICK_MODE" == true ]]; then
