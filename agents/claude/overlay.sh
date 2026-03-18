@@ -16,6 +16,9 @@ agent_prepare_config() {
     local real_claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
     local config_dir="$real_claude_dir/sandbox-config"
+    # Unlock for regeneration (may have been locked by a prior run).
+    # The overlay runs outside the sandbox, so we have ownership.
+    chmod u+w "$config_dir" 2>/dev/null || true
     mkdir -p "$config_dir"
 
     # --- Merge CLAUDE.md ---
@@ -29,7 +32,9 @@ agent_prepare_config() {
         if [[ -f "$sandbox_snippet" ]]; then
             cat "$sandbox_snippet"
         fi
-    } > "$config_dir/CLAUDE.md"
+    } > "$config_dir/CLAUDE.md.tmp"
+    chmod a-w "$config_dir/CLAUDE.md.tmp" 2>/dev/null || true
+    mv -f "$config_dir/CLAUDE.md.tmp" "$config_dir/CLAUDE.md"
 
     # --- Merge settings.json ---
     local sandbox_settings="$SANDBOX_DIR/agents/claude/settings.json"
@@ -53,9 +58,14 @@ for rule in sandbox.get('permissions', {}).get('allow', []):
         existing.append(rule)
 user['permissions']['allow'] = existing
 json.dump(user, sys.stdout, indent=2)
-" "$user_settings" "$sandbox_settings" > "$config_dir/settings.json"
+" "$user_settings" "$sandbox_settings" > "$config_dir/settings.json.tmp"
+        mv -f "$config_dir/settings.json.tmp" "$config_dir/settings.json"
     elif [[ -f "$user_settings" ]]; then
         cp "$user_settings" "$config_dir/settings.json"
+    fi
+    # Make merged settings read-only to prevent mid-session permission escalation
+    if [[ -f "$config_dir/settings.json" ]]; then
+        chmod a-w "$config_dir/settings.json" 2>/dev/null || true
     fi
 
     # --- Symlink everything else (preserve fresher sandbox copies) ---
@@ -99,6 +109,13 @@ json.dump(user, sys.stdout, indent=2)
         fi
         ln -snf "$item" "$target" 2>/dev/null || true
     done
+
+    # Lock the sandbox-config directory to prevent sandboxed agents from
+    # deleting or replacing the read-only merged files (rm requires dir write).
+    chmod a-w "$config_dir" 2>/dev/null || true
+
+    # Register for bwrap ro-bind (prevents rm/chmod bypass inside sandbox)
+    _AGENT_SANDBOX_CONFIG_DIRS+=("$config_dir")
 
     # Export CLAUDE_CONFIG_DIR so Claude reads from merged config
     _AGENT_ENV_EXPORTS+=("CLAUDE_CONFIG_DIR=$config_dir")

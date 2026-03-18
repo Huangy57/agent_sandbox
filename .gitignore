@@ -8,3 +8,4 @@
 # Slurm job output from testing
 slurm-*.out
 .DS_Store
+.opencode/

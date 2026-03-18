@@ -383,6 +383,24 @@ if [[ -d "$HOME/.claude" ]] || command -v claude &>/dev/null; then
     else
         fail "CLAUDE_CONFIG_DIR not set correctly"
     fi
+
+    # Verify sandbox-config is read-only (bwrap/firejail: ro-bind; landlock: chmod only)
+    if has_mount_ns; then
+        if sandbox bash -c 'echo INJECT >> "$CLAUDE_CONFIG_DIR/CLAUDE.md" 2>&1; echo $?'; then
+            if [[ "$OUTPUT" == *"0" ]]; then
+                fail "sandbox-config CLAUDE.md is writable (should be read-only)"
+            else
+                pass "sandbox-config CLAUDE.md is read-only"
+            fi
+        fi
+        if sandbox bash -c 'rm -f "$CLAUDE_CONFIG_DIR/CLAUDE.md" 2>&1; echo $?'; then
+            if [[ "$OUTPUT" == *"0" ]]; then
+                fail "sandbox-config CLAUDE.md can be deleted (should be blocked)"
+            else
+                pass "sandbox-config CLAUDE.md cannot be deleted"
+            fi
+        fi
+    fi
 else
     skip "Claude not installed — skipping Claude overlay tests"
 fi

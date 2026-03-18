@@ -15,6 +15,7 @@ agent_prepare_config() {
     local real_gemini_dir="${GEMINI_CONFIG_DIR:-$HOME/.gemini}"
 
     local config_dir="$real_gemini_dir/sandbox-config"
+    chmod u+w "$config_dir" 2>/dev/null || true
     mkdir -p "$config_dir"
 
     # --- Merge GEMINI.md ---
@@ -28,7 +29,9 @@ agent_prepare_config() {
             echo ""
             cat "$sandbox_snippet"
         fi
-    } > "$config_dir/GEMINI.md"
+    } > "$config_dir/GEMINI.md.tmp"
+    chmod a-w "$config_dir/GEMINI.md.tmp" 2>/dev/null || true
+    mv -f "$config_dir/GEMINI.md.tmp" "$config_dir/GEMINI.md"
 
     # --- Merge settings.json ---
     # Gemini CLI uses ~/.gemini/settings.json for user-level settings.
@@ -56,6 +59,10 @@ agent_prepare_config() {
         fi
         ln -snf "$item" "$target" 2>/dev/null || true
     done
+
+    chmod a-w "$config_dir" 2>/dev/null || true
+
+    _AGENT_SANDBOX_CONFIG_DIRS+=("$config_dir")
 
     # Export GEMINI_CONFIG_DIR so Gemini reads from merged config
     _AGENT_ENV_EXPORTS+=("GEMINI_CONFIG_DIR=$config_dir")

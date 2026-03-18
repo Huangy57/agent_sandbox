@@ -251,6 +251,13 @@ backend_prepare() {
         fi
     done
 
+    # Make agent sandbox-config directories read-only inside the sandbox.
+    for _agent_dir in "${_AGENT_SANDBOX_CONFIG_DIRS[@]:-}"; do
+        if [[ -n "$_agent_dir" && -d "$_agent_dir" ]]; then
+            FIREJAIL_ARGS+=(--read-only="$_agent_dir")
+        fi
+    done
+
     # Hide the sandbox bypass token if configured (see ADMIN_HARDENING.md §1)
     if [[ -n "${SANDBOX_BYPASS_TOKEN:-}" && -e "$SANDBOX_BYPASS_TOKEN" ]]; then
         FIREJAIL_ARGS+=(--blacklist="$SANDBOX_BYPASS_TOKEN")

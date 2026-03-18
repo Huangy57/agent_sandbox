@@ -15,6 +15,7 @@ agent_prepare_config() {
     local real_opencode_dir="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 
     local config_dir="$real_opencode_dir/sandbox-config"
+    chmod u+w "$config_dir" 2>/dev/null || true
     mkdir -p "$config_dir"
 
     # --- Merge AGENTS.md ---
@@ -28,7 +29,9 @@ agent_prepare_config() {
             echo ""
             cat "$sandbox_snippet"
         fi
-    } > "$config_dir/AGENTS.md"
+    } > "$config_dir/AGENTS.md.tmp"
+    chmod a-w "$config_dir/AGENTS.md.tmp" 2>/dev/null || true
+    mv -f "$config_dir/AGENTS.md.tmp" "$config_dir/AGENTS.md"
 
     # --- Symlink everything else (preserve fresher sandbox copies) ---
     for item in "$real_opencode_dir"/* "$real_opencode_dir"/.*; do
@@ -47,6 +50,10 @@ agent_prepare_config() {
         fi
         ln -snf "$item" "$target" 2>/dev/null || true
     done
+
+    chmod a-w "$config_dir" 2>/dev/null || true
+
+    _AGENT_SANDBOX_CONFIG_DIRS+=("$config_dir")
 
     # Export OPENCODE_CONFIG_DIR so OpenCode reads from merged config
     _AGENT_ENV_EXPORTS+=("OPENCODE_CONFIG_DIR=$config_dir")

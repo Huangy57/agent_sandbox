@@ -815,6 +815,8 @@ _DETECTED_AGENTS=()
 
 # Environment exports collected from agent overlays
 _AGENT_ENV_EXPORTS=()
+# Sandbox-config directories to make read-only inside the sandbox (bwrap ro-bind)
+_AGENT_SANDBOX_CONFIG_DIRS=()
 
 # _detect_agents — scan agents/*/detect.sh, populate _DETECTED_AGENTS
 _detect_agents() {
@@ -921,6 +923,7 @@ prepare_agent_configs() {
     local project_dir="$1"
     local agents_dir="$SANDBOX_DIR/agents"
     _AGENT_ENV_EXPORTS=()
+    _AGENT_SANDBOX_CONFIG_DIRS=()
 
     for agent_name in "${_DETECTED_AGENTS[@]}"; do
         local overlay="$agents_dir/$agent_name/overlay.sh"
