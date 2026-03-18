@@ -8,7 +8,7 @@ Docker requires root and is not available on shared HPC clusters. The natural co
 
 Apptainer was designed for **reproducibility**: running the same software stack across different clusters. Its documented philosophy is ["integration over isolation"](https://apptainer.org/docs/admin/main/admin_quickstart.html), meaning containers share the host PID space, network, IPC, and home directory by default. This is deliberate, since HPC workloads need access to GPUs, InfiniBand, parallel filesystems, and Slurm.
 
-This sandbox was designed for **containment**: restricting what an AI coding agent can see and modify on the host. Its philosophy is isolation-first, with selective holes for what the agent needs (project directory, Slurm, munge).
+This sandbox was designed for **containment**: restricting what AI coding agents (Claude Code, Codex, Gemini CLI, Aider, OpenCode) can see and modify on the host. Its philosophy is isolation-first, with selective holes for what the agent needs (project directory, Slurm via chaperon proxy, agent-specific API keys via env.conf profiles).
 
 These are opposite defaults. An Apptainer container is wide-open unless you lock it down; the sandbox is locked-down unless you open it up.
 
@@ -27,9 +27,10 @@ These are opposite defaults. An Apptainer container is wide-open unless you lock
 | Host `/proc` | Isolated (unshare-pid) | Full host `/proc` | Isolated |
 | Env var filtering | ✓ (blocks SSH_*, credentials) | ✗ (inherits host environment) | Partial (`--cleanenv`) |
 | Passwd/group filtering | ✓ (system accounts + current user) | Generates container-local files, but includes user info | Same |
-| Seccomp | Available (not recommended) | ✗ ([not applied by default](https://apptainer.org/docs/user/main/security_options.html)) | ✗ |
-| io_uring blocked | ✗ | ✗ | ✗ |
-| Slurm integration | Wrapper interposition (sandboxes submitted jobs) | Transparent (no wrapping) | Transparent |
+| Seccomp | ✓ (bwrap: generated BPF; firejail: --seccomp.drop; landlock: custom) | ✗ ([not applied by default](https://apptainer.org/docs/user/main/security_options.html)) | ✗ |
+| io_uring blocked | ✓ (all three backends) | ✗ | ✗ |
+| Agent config isolation | ✓ (merged instruction files, kernel-enforced read-only) | n/a | n/a |
+| Slurm integration | Chaperon proxy (scoped sbatch/scancel/squeue, CWD validation) | Transparent (no wrapping) | Transparent |
 
 The sandbox provides **stronger default containment** in every category except network namespace (neither isolates the network by default, since both need it for munge/Slurm). Apptainer's `--containall` closes some gaps (PID, IPC, `/tmp`, home) but still does not filter environment variables, does not isolate `/run`, and does not apply seccomp.
 
@@ -105,9 +106,9 @@ Neither approach provides complete isolation. Both share these weaknesses:
 
 The sandbox has additional backend-specific gaps documented in the [README's Known Limitations](README.md#known-limitations):
 
-- **Landlock** cannot block Unix socket `connect()` (D-Bus/systemd escape), has no PID namespace, no self-protection, and no LDAP user enumeration filtering.
-- **bwrap** seccomp filter is generated at runtime (`generate-seccomp.py`) rather than built-in — verify it loads (no "seccomp" warnings on stderr).
-- **All backends** leave IPC namespace shared by default. `/dev/shm` is a covert channel between sandbox sessions.
+- **Landlock** cannot block Unix socket `connect()` (D-Bus/systemd escape), has no PID namespace, no mount namespace (BLOCKED_FILES and PRIVATE_TMP ineffective), and no LDAP user enumeration filtering.
+- **bwrap** seccomp filter is generated at runtime (`generate-seccomp.py`) — verify it loads (no "seccomp" warnings on stderr).
+- **All backends** leave IPC namespace and network namespace shared by default. `/dev/shm` and abstract Unix sockets are covert channels between sandbox sessions.
 
 The key difference is not that the sandbox has no gaps (it does), but that its gaps are smaller and better characterized. Apptainer's default posture exposes the entire host environment; the sandbox's default posture hides everything and selectively re-exposes what is needed. Both require admin hardening for strong isolation (see [Admin Hardening §§1-5](ADMIN_HARDENING.md#summary)).
 
