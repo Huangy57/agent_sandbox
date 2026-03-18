@@ -41,7 +41,7 @@ Files installed:
   ~/.config/agent-sandbox/sandbox.conf       Your permissions config
   ~/.config/agent-sandbox/test.sh            Test suite
   ~/.config/agent-sandbox/agents/            Agent profiles (auto-detected)
-  ~/.config/agent-sandbox/chaperon/          Slurm proxy (13 handlers, 19 stubs)
+  ~/.config/agent-sandbox/chaperon/          Slurm proxy (14 handlers, 19 stubs)
   ~/.config/agent-sandbox/backends/          bwrap, firejail, landlock backends
   ~/.config/agent-sandbox/bin/               PATH-shadowing fallback scripts
 

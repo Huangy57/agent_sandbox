@@ -412,8 +412,7 @@ The test suite (`test.sh` sections 5–6) verifies:
 - Munge socket is hidden/blocked inside sandbox
 - Slurm binaries are blocked inside sandbox (bwrap/firejail)
 - Slurm config is hidden inside sandbox (bwrap/firejail)
-- `srun --pty` is denied by chaperon
-- `srun` in allocation mode wraps command in sandbox-exec.sh
+- `srun --pty` and `srun --jobid` are denied by chaperon
 - `_CHAPERON_FIFO_DIR` is set inside sandbox
 - Chaperon request FIFO exists inside sandbox
 - Comment stripping (`_strip_chaperon_tags`):
