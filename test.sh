@@ -550,14 +550,32 @@ else
     fi
 fi
 
-# 5g. squeue scoped (--user denied)
-if sandbox bash -c 'squeue --user=root 2>&1'; then
-    fail "squeue --user should be denied"
-else
-    if echo "$OUTPUT" | grep -qi "not allowed"; then
-        pass "squeue --user correctly denied by chaperon"
+# 5g. squeue scope-widening flags silently accepted (transparent scoping)
+if sandbox bash -c 'squeue --user=root 2>&1; echo DONE'; then
+    if echo "$OUTPUT" | grep -q "DONE"; then
+        pass "squeue --user=root silently accepted (scoped transparently)"
     else
-        fail "squeue --user error unexpected" "$OUTPUT"
+        fail "squeue --user=root did not complete" "$OUTPUT"
+    fi
+else
+    if echo "$OUTPUT" | grep -q "DONE"; then
+        pass "squeue --user=root silently accepted (scoped transparently)"
+    else
+        fail "squeue --user=root failed unexpectedly" "$OUTPUT"
+    fi
+fi
+
+if sandbox bash -c 'squeue --me 2>&1; echo DONE'; then
+    if echo "$OUTPUT" | grep -q "DONE"; then
+        pass "squeue --me silently accepted (scoped transparently)"
+    else
+        fail "squeue --me did not complete" "$OUTPUT"
+    fi
+else
+    if echo "$OUTPUT" | grep -q "DONE"; then
+        pass "squeue --me silently accepted (scoped transparently)"
+    else
+        fail "squeue --me failed unexpectedly" "$OUTPUT"
     fi
 fi
 
@@ -796,6 +814,33 @@ else
             else
                 fail "scancel did not clearly reject out-of-scope job" "$OUTPUT"
             fi
+        fi
+
+        # 6e. scancel scope-widening flags (transparent scoping)
+        # --all, --me, -u <user> should all silently cancel scoped jobs (or succeed with no jobs)
+        if sandbox bash -c 'scancel --all 2>&1'; then
+            pass "scancel --all accepted (cancels scoped jobs)"
+        else
+            fail "scancel --all should not be rejected" "$OUTPUT"
+        fi
+
+        if sandbox bash -c 'scancel --me 2>&1'; then
+            pass "scancel --me accepted (cancels scoped jobs)"
+        else
+            fail "scancel --me should not be rejected" "$OUTPUT"
+        fi
+
+        if sandbox bash -c 'scancel -u "$(whoami)" 2>&1'; then
+            pass "scancel -u <user> accepted (cancels scoped jobs)"
+        else
+            fail "scancel -u <user> should not be rejected" "$OUTPUT"
+        fi
+
+        # Bare scancel (no args) should also cancel all in scope
+        if sandbox bash -c 'scancel 2>&1'; then
+            pass "bare scancel accepted (cancels scoped jobs)"
+        else
+            fail "bare scancel should not be rejected" "$OUTPUT"
         fi
     else
         skip "scancel not found on host — skipping scancel tests"

@@ -74,10 +74,16 @@ handle_squeue() {
     while (( i < ${#REQ_ARGS[@]} )); do
         local arg="${REQ_ARGS[$i]}"
         case "$arg" in
-            # Denied: scope is controlled by the chaperon
-            -u|--user|--user=*|--me|--account|--account=*)
-                echo "sandbox: squeue '$arg' is not allowed — the sandbox automatically shows only your sandbox-submitted jobs." >&2
-                return 1
+            # Silently accept scope-widening flags — the sandbox already
+            # scopes output, so these are no-ops.  Skip any attached value.
+            -u|--user|--account)
+                # These take a value argument — skip it
+                if (( i + 1 < ${#REQ_ARGS[@]} )) && [[ "${REQ_ARGS[$((i+1))]}" != -* ]]; then
+                    (( i++ )) || true
+                fi
+                ;;
+            --user=*|--account=*|--me)
+                # Self-contained — just skip
                 ;;
             --*=*)
                 if _is_squeue_allowed "$arg"; then

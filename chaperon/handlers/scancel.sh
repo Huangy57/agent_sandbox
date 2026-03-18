@@ -76,10 +76,18 @@ handle_scancel() {
     while (( i < ${#REQ_ARGS[@]} )); do
         local arg="${REQ_ARGS[$i]}"
         case "$arg" in
-            # Denied: scope is controlled by the chaperon
-            -u|--user|--user=*|--me|--account|--account=*|--wckey|--wckey=*)
-                echo "sandbox: scancel '$arg' is not allowed — job scope is controlled by the sandbox (SLURM_SCOPE in sandbox.conf)." >&2
-                return 1
+            # Scope-widening flags: map to "cancel all in scope".
+            # The user expects these to work — the sandbox just limits
+            # the scope silently.
+            --all|-u|--user|--account)
+                cancel_all=true
+                # Skip value argument if present (e.g., -u dotto)
+                if [[ "$arg" != "--all" ]] && (( i + 1 < ${#REQ_ARGS[@]} )) && [[ "${REQ_ARGS[$((i+1))]}" != -* ]]; then
+                    (( i++ )) || true
+                fi
+                ;;
+            --user=*|--account=*|--me|--wckey|--wckey=*)
+                cancel_all=true
                 ;;
             --*=*)
                 if _is_scancel_allowed "$arg"; then
@@ -122,15 +130,18 @@ handle_scancel() {
     done
 
     # Handle --help/--version/--usage (no job IDs needed)
+    for f in "${validated_flags[@]}"; do
+        case "$f" in --help|--usage|--version)
+            local rc=0
+            "$real_scancel" "${validated_flags[@]}" || rc=$?
+            return "$rc"
+            ;;
+        esac
+    done
+
+    # Bare scancel (no job IDs, no --all/--me) → cancel all in scope
     if [[ ${#requested_ids[@]} -eq 0 ]] && ! "$cancel_all"; then
-        for f in "${validated_flags[@]}"; do
-            case "$f" in --help|--usage|--version)
-                local rc=0
-                "$real_scancel" "${validated_flags[@]}" || rc=$?
-                return "$rc"
-                ;;
-            esac
-        done
+        cancel_all=true
     fi
 
     # Get the set of jobs allowed by this scope
@@ -183,12 +194,14 @@ handle_scancel() {
     fi
 
     if [[ ${#final_ids[@]} -eq 0 ]]; then
-        if [[ ${#requested_ids[@]} -gt 0 ]]; then
+        if "$cancel_all"; then
+            # No jobs to cancel — not an error
+            return 0
+        elif [[ ${#requested_ids[@]} -gt 0 ]]; then
             echo "sandbox: none of the requested jobs were submitted by this $scope." >&2
-        else
-            echo "sandbox: scancel requires job IDs or 'all' to cancel all sandbox jobs." >&2
+            return 1
         fi
-        return 1
+        return 0
     fi
 
     local rc=0
