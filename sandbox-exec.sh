@@ -174,6 +174,20 @@ if [[ -n "$_CHAPERON_DIR" ]]; then
     _CHAPERON_PID=$!
 fi
 
+# Clean up chaperon on exit — backend_exec does exec, so this only runs
+# if exec fails (e.g., command not found, bwrap error).  On success, exec
+# replaces this shell and the chaperon dies via PR_SET_PDEATHSIG.
+_sandbox_cleanup() {
+    if [[ -n "${_CHAPERON_PID:-}" ]]; then
+        kill "$_CHAPERON_PID" 2>/dev/null || true
+        wait "$_CHAPERON_PID" 2>/dev/null || true
+    fi
+    if [[ -n "${_CHAPERON_DIR:-}" ]]; then
+        rm -rf "$_CHAPERON_DIR" 2>/dev/null || true
+    fi
+}
+trap _sandbox_cleanup EXIT
+
 # Close inherited file descriptors (3+) to prevent FD-based sandbox bypass.
 # Open FDs from the parent process persist across exec and bypass filesystem
 # isolation — a parent-opened FD to /etc/shadow would remain readable inside
