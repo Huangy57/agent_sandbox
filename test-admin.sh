@@ -6,6 +6,7 @@
 #
 # Sections:
 #   T01-T03:  BLOCKED_ENV_VARS clearing and user additions
+#   T04-T05:  ALLOWED_ENV_VARS user additions and admin merge
 #   T09-T10:  HOME_READONLY -> HOME_WRITABLE escalation (.ssh, .gnupg)
 #   T11-T14:  DENIED_WRITABLE_PATHS enforcement
 #   T15-T16:  Scalar protection (TOKEN_FILE, SANDBOX_BYPASS_TOKEN)
@@ -182,6 +183,53 @@ else
     fail "T03: Sandbox failed to start" "$OUTPUT"
 fi
 unset GITHUB_TOKEN MY_LAB_SECRET_T03
+clean_user_conf
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════════
+#  T04-T05: ALLOWED_ENV_VARS user additions and admin merge
+# ══════════════════════════════════════════════════════════════════
+
+echo "ALLOWED_ENV_VARS Enforcement (T04-T05)"
+echo ""
+
+# ── T04: User adds to ALLOWED_ENV_VARS — overrides BLOCKED_ENV_VARS ──
+echo "  T04: User ALLOWED_ENV_VARS overrides BLOCKED_ENV_VARS"
+write_user_conf 'ALLOWED_ENV_VARS+=("GITHUB_TOKEN")'
+export GITHUB_TOKEN="allow-test-T04"
+if sandbox_raw bash -c 'echo ${GITHUB_TOKEN:-UNSET}'; then
+    if echo "$OUTPUT" | grep -q "allow-test-T04"; then
+        pass "T04: GITHUB_TOKEN passed through via ALLOWED_ENV_VARS"
+    else
+        fail "T04: GITHUB_TOKEN still blocked despite ALLOWED_ENV_VARS" "$OUTPUT"
+    fi
+else
+    fail "T04: Sandbox failed to start" "$OUTPUT"
+fi
+unset GITHUB_TOKEN
+clean_user_conf
+
+# ── T05: User ALLOWED_ENV_VARS overrides SSH_* catch-all ──
+echo "  T05: User ALLOWED_ENV_VARS overrides SSH_* catch-all"
+write_user_conf 'ALLOWED_ENV_VARS+=("SSH_TTY")'
+export SSH_TTY="/dev/pts/test-T05"
+export SSH_CONNECTION="1.2.3.4 1234 5.6.7.8 22"
+if sandbox_raw bash -c 'echo TTY=${SSH_TTY:-UNSET} CONN=${SSH_CONNECTION:-UNSET}'; then
+    if echo "$OUTPUT" | grep -q "TTY=/dev/pts/test-T05"; then
+        pass "T05: SSH_TTY passed through via ALLOWED_ENV_VARS"
+    else
+        fail "T05: SSH_TTY still blocked despite ALLOWED_ENV_VARS" "$OUTPUT"
+    fi
+    if echo "$OUTPUT" | grep -q "CONN=UNSET"; then
+        pass "T05: SSH_CONNECTION still blocked (not in ALLOWED_ENV_VARS)"
+    else
+        fail "T05: SSH_CONNECTION leaked" "$OUTPUT"
+    fi
+else
+    fail "T05: Sandbox failed to start" "$OUTPUT"
+fi
+unset SSH_TTY SSH_CONNECTION
 clean_user_conf
 
 echo ""

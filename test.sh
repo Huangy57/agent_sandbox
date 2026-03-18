@@ -1585,6 +1585,52 @@ fi
 
 unset SSH_AUTH_SOCK SSH_CONNECTION SSH_CLIENT SSH_TTY
 
+# ALLOWED_ENV_VARS — override BLOCKED_ENV_VARS
+# Use a conf.d snippet to set ALLOWED_ENV_VARS for this test
+_aev_conf="$HOME/.config/agent-sandbox/conf.d/test-allowed-env-$$.conf"
+mkdir -p "$HOME/.config/agent-sandbox/conf.d"
+echo 'ALLOWED_ENV_VARS+=("GITHUB_TOKEN")' > "$_aev_conf"
+export GITHUB_TOKEN="allowed-env-test-value"
+if sandbox bash -c 'echo ${GITHUB_TOKEN:-UNSET}'; then
+    if [[ "$OUTPUT" == "allowed-env-test-value" ]]; then
+        pass "ALLOWED_ENV_VARS overrides BLOCKED_ENV_VARS (GITHUB_TOKEN passed through)"
+    else
+        fail "ALLOWED_ENV_VARS did not override BLOCKED_ENV_VARS" "$OUTPUT"
+    fi
+fi
+unset GITHUB_TOKEN
+rm -f "$_aev_conf"
+
+# ALLOWED_ENV_VARS — override SSH_* catch-all
+echo 'ALLOWED_ENV_VARS+=("SSH_TTY")' > "$_aev_conf"
+export SSH_TTY="/dev/pts/test-allowed"
+export SSH_CONNECTION="1.2.3.4 1234 5.6.7.8 22"
+if sandbox bash -c 'echo TTY=${SSH_TTY:-UNSET} CONN=${SSH_CONNECTION:-UNSET}'; then
+    if echo "$OUTPUT" | grep -q "TTY=/dev/pts/test-allowed"; then
+        pass "ALLOWED_ENV_VARS overrides SSH_* catch-all (SSH_TTY passed through)"
+    else
+        fail "ALLOWED_ENV_VARS did not override SSH_* catch-all for SSH_TTY" "$OUTPUT"
+    fi
+    if echo "$OUTPUT" | grep -q "CONN=UNSET"; then
+        pass "SSH_CONNECTION still blocked (not in ALLOWED_ENV_VARS)"
+    else
+        fail "SSH_CONNECTION leaked despite not being in ALLOWED_ENV_VARS" "$OUTPUT"
+    fi
+fi
+unset SSH_TTY SSH_CONNECTION
+rm -f "$_aev_conf"
+
+# Empty ALLOWED_ENV_VARS — blocked vars remain blocked (no regression)
+export GITHUB_TOKEN="empty-allow-test"
+if sandbox bash -c 'echo ${GITHUB_TOKEN:-UNSET}'; then
+    if [[ "$OUTPUT" == "UNSET" ]]; then
+        pass "Empty ALLOWED_ENV_VARS: GITHUB_TOKEN still blocked"
+    else
+        fail "Empty ALLOWED_ENV_VARS: GITHUB_TOKEN leaked" "$OUTPUT"
+    fi
+fi
+unset GITHUB_TOKEN
+
 # Non-blocked env vars should pass through to the sandbox
 export _TEST_CRED_VAR="test-credential-value"
 if sandbox bash -c 'echo ${LANG:-UNSET}'; then
