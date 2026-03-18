@@ -9,3 +9,5 @@
 slurm-*.out
 .DS_Store
 .opencode/
+test-projects/
+slurm-*.out
