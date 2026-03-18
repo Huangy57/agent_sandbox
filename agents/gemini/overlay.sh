@@ -32,7 +32,9 @@ agent_prepare_config() {
         fi
     } > "$config_dir/GEMINI.md.tmp.$$"
     chmod a-w "$config_dir/GEMINI.md.tmp.$$" 2>/dev/null || true
-    mv -f "$config_dir/GEMINI.md.tmp.$$" "$config_dir/GEMINI.md"
+    if ! mv -f "$config_dir/GEMINI.md.tmp.$$" "$config_dir/GEMINI.md" 2>/dev/null; then
+        rm -f "$config_dir/GEMINI.md.tmp.$$" 2>/dev/null || true
+    fi
 
     # --- Merge settings.json ---
     # Gemini CLI uses ~/.gemini/settings.json for user-level settings.

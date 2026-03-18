@@ -36,7 +36,11 @@ agent_prepare_config() {
         fi
     } > "$config_dir/CLAUDE.md.tmp.$$"
     chmod a-w "$config_dir/CLAUDE.md.tmp.$$" 2>/dev/null || true
-    mv -f "$config_dir/CLAUDE.md.tmp.$$" "$config_dir/CLAUDE.md"
+    # Atomic replace — if it fails (NFS race with concurrent SLURM tasks),
+    # another task already placed the same content, which is fine.
+    if ! mv -f "$config_dir/CLAUDE.md.tmp.$$" "$config_dir/CLAUDE.md" 2>/dev/null; then
+        rm -f "$config_dir/CLAUDE.md.tmp.$$" 2>/dev/null || true
+    fi
 
     # --- Merge settings.json ---
     local sandbox_settings="$SANDBOX_DIR/agents/claude/settings.json"
@@ -61,9 +65,11 @@ for rule in sandbox.get('permissions', {}).get('allow', []):
 user['permissions']['allow'] = existing
 json.dump(user, sys.stdout, indent=2)
 " "$user_settings" "$sandbox_settings" > "$config_dir/settings.json.tmp.$$"
-        mv -f "$config_dir/settings.json.tmp.$$" "$config_dir/settings.json"
+        if ! mv -f "$config_dir/settings.json.tmp.$$" "$config_dir/settings.json" 2>/dev/null; then
+            rm -f "$config_dir/settings.json.tmp.$$" 2>/dev/null || true
+        fi
     elif [[ -f "$user_settings" ]]; then
-        cp "$user_settings" "$config_dir/settings.json"
+        cp "$user_settings" "$config_dir/settings.json" 2>/dev/null || true
     fi
     # Make merged settings read-only to prevent mid-session permission escalation
     if [[ -f "$config_dir/settings.json" ]]; then
@@ -97,7 +103,7 @@ json.dump(user, sys.stdout, indent=2)
             if [[ -d "$item" ]]; then
                 cp -rn "$target"/. "$item"/ 2>/dev/null || true
             fi
-            rm -rf "$target"
+            rm -rf "$target" 2>/dev/null || true
         fi
         # If target is a real file (not a symlink) and newer than the
         # outside version, keep it — it was refreshed inside the sandbox.

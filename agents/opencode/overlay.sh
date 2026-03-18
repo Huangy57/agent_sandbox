@@ -33,7 +33,9 @@ agent_prepare_config() {
         fi
     } > "$config_dir/AGENTS.md.tmp.$$"
     chmod a-w "$config_dir/AGENTS.md.tmp.$$" 2>/dev/null || true
-    mv -f "$config_dir/AGENTS.md.tmp.$$" "$config_dir/AGENTS.md"
+    if ! mv -f "$config_dir/AGENTS.md.tmp.$$" "$config_dir/AGENTS.md" 2>/dev/null; then
+        rm -f "$config_dir/AGENTS.md.tmp.$$" 2>/dev/null || true
+    fi
 
     # --- Symlink everything else (preserve fresher sandbox copies) ---
     for item in "$real_opencode_dir"/* "$real_opencode_dir"/.*; do
