@@ -25,9 +25,10 @@ sandbox-exec.sh
               - /run/munge BLOCKED (no munge auth)
               - /usr/bin/{sbatch,srun,...} BLOCKED
               - /etc/slurm/ BLOCKED
-              - stub sbatch → writes to req FIFO → chaperon validates,
-                wraps in sandbox-exec.sh, calls real sbatch → writes
-                response to per-request FIFO → stub reads result
+              - stub sbatch → writes to req FIFO (flock for atomicity)
+                → chaperon validates, closes FD 3 for handler children
+                (3>&-), wraps in sandbox-exec.sh, calls real sbatch
+                → writes response to per-request FIFO → stub reads result
               - stub srun → writes to req FIFO → chaperon validates flags:
                   alloc mode (login node): wraps command in sandbox-exec.sh,
                     calls real srun → compute node runs sandboxed
@@ -109,9 +110,11 @@ ARG <base64>          # one per sbatch flag/value
 ARG <base64>
 CWD <base64>          # working directory (validated by handler)
 SCRIPT <base64>       # job script content (--wrap converted to script)
-RESP_FIFO <path>      # path to per-request response FIFO
+RESP_FIFO <path>      # raw filesystem path (not base64) — validated by chaperon
 END
 ```
+
+Note: `protocol.sh` provides `chaperon_send_request()` as a helper, but `_stub_lib.sh` builds the request message directly (to include the `RESP_FIFO` field and support atomic writes via `flock`). The chaperon main loop also parses requests inline rather than using `chaperon_read_request()`, in order to support read timeouts and parent liveness checks.
 
 ### Response (chaperon → stub)
 
@@ -138,15 +141,18 @@ The communication channel uses named pipes (FIFOs) in a per-session temporary di
 2. **Persistent request pipe**: A single `req` FIFO handles all requests. The chaperon opens it O_RDWR to prevent blocking and avoid EOF between requests.
 3. **Per-request response pipes**: Each stub creates a response FIFO with an unpredictable name (`mktemp -u`), sends the path in the request, and reads the response from it. This prevents response mixing between concurrent requests.
 4. **No FD inheritance needed**: Unlike socketpairs, FIFOs are filesystem-backed and survive bwrap's FD closing (which closes all FDs > 2). No exemptions needed.
-5. **Cleanup on exit**: The chaperon's EXIT trap removes the entire FIFO directory.
+5. **Timeouts**: The stub reads responses with a 30-second timeout (`chaperon_read_response` in `_stub_lib.sh`) to prevent infinite hangs if the chaperon dies. The chaperon uses a 30-second body read timeout and a 10-second response write timeout to prevent stalls from malicious or dead stubs. All internal squeue calls (for scope resolution) use `timeout 10`.
+6. **Cleanup on exit**: The chaperon's EXIT trap removes the entire FIFO directory.
 
 ## Chaperon Lifecycle
 
 1. **Creation**: `sandbox-exec.sh` creates a FIFO directory via `mktemp -d` and a request pipe via `mkfifo`, launches `chaperon.sh` as a background process, and exports `_CHAPERON_FIFO_DIR` for the sandbox.
 2. **Orphan prevention**: The chaperon sets `PR_SET_PDEATHSIG` via Python/ctypes so it receives SIGTERM if its parent (sandbox-exec.sh) dies. This prevents orphaned chaperon processes.
 3. **Signal handling**: SIGTERM and SIGINT are trapped for clean shutdown (FD cleanup).
-4. **Main loop**: Reads requests via `chaperon_read_request()`, dispatches to the appropriate handler, captures stdout/stderr, and sends the response.
+4. **Main loop**: Reads requests inline with timeouts (30-second body timeout to prevent stalls from malformed requests), dispatches to the appropriate handler with FD 3 closed (`3>&-`) to prevent child processes from inheriting the request FIFO, captures stdout/stderr, and writes the response via the held response FD with a 10-second write timeout.
 5. **Exit**: On read error, parent death (liveness polling), or signal, the chaperon removes the FIFO directory and exits 0.
+
+Note: `protocol.sh` provides a `chaperon_read_request()` helper, but the main loop in `chaperon.sh` performs its own inline parsing to support read timeouts and liveness checks that the helper does not provide.
 
 ## Handler Dispatch
 
@@ -158,8 +164,8 @@ This design makes it trivial to add support for new commands (drop a handler fil
 
 The sbatch handler (`handlers/sbatch.sh`) performs three validation steps before submission:
 
-1. **Argument whitelisting**: Every flag is checked against `_SBATCH_ALLOWED_FLAGS` (~40 safe flags). Denied flags cause immediate rejection with a clear error message.
-2. **CWD validation**: The requested working directory must be a physical path under the project directory (resolves symlinks to prevent escape).
+1. **CWD validation**: The requested working directory must be a physical path under the project directory (resolves symlinks to prevent escape). Both sbatch and srun (allocation mode) validate CWD.
+2. **Argument whitelisting**: Every flag is checked against `_SBATCH_ALLOWED_FLAGS` (~40 safe flags). Denied flags cause immediate rejection with a clear error message.
 3. **Job wrapping**: The user's script is written to a temp file, and a wrapper script is generated that runs it inside `sandbox-exec.sh --project-dir $PROJECT_DIR`. The wrapper is submitted to the real sbatch.
 
 ### Job Tagging and Scoping via `--comment`
@@ -178,7 +184,7 @@ chaperon:sid=<session_id>,proj=<project_hash>[,user=<original_comment>]:END
 
 | Field | Content | Purpose |
 |---|---|---|
-| `sid` | `<PID>.<epoch>` | Unique per chaperon instance (session scope) |
+| `sid` | `<PID>.<epoch>` | Unique per chaperon instance (session scope). Set once at startup and guarded against re-initialization when `_handler_lib.sh` is re-sourced per handler dispatch. |
 | `proj` | First 12 hex of `md5(project_dir)` | Groups jobs by project (project scope) |
 | `user` | User's original `--comment` value (percent-encoded) | Preserves user metadata |
 | `:END` | Literal end marker | Unambiguous tag boundary for stripping (colons are percent-encoded in user values, so `:END` cannot appear inside the encoded comment) |
@@ -236,9 +242,10 @@ Unknown flags (not in the whitelist) are also rejected.
 The srun handler (`handlers/srun.sh`) operates in two modes:
 
 **Allocation mode** (no `SLURM_JOB_ID` — login node):
-1. Validates flags against a whitelist that includes scheduling flags (`-p`, `-A`, `-t`, etc.)
-2. Wraps the command in `sandbox-exec.sh --project-dir $DIR` so the compute-node process inherits sandbox restrictions
-3. Calls real srun with the validated flags and wrapped command
+1. Validates CWD is under the project directory (same check as sbatch)
+2. Validates flags against a whitelist that includes scheduling flags (`-p`, `-A`, `-t`, etc.)
+3. Wraps the command in `sandbox-exec.sh --project-dir $DIR` so the compute-node process inherits sandbox restrictions
+4. Calls real srun with the validated flags and wrapped command
 
 **Step mode** (`SLURM_JOB_ID` set — inside a compute-node allocation):
 1. Validates flags against a step-only whitelist (no scheduling flags — steps inherit the job's resources)
@@ -269,6 +276,7 @@ The squeue handler (`handlers/squeue.sh`) filters queue output to only show jobs
 - Flags like `--user`, `--me`, `--account` are denied (scope controlled by chaperon)
 - If specific job IDs are requested via `-j`, they're validated against scope
 - Otherwise, all jobs in scope are shown
+- All internal squeue calls use `timeout 10` to prevent hangs if slurmctld is unresponsive
 
 ### scontrol Handler
 
@@ -277,7 +285,7 @@ The scontrol handler (`handlers/scontrol.sh`) allows a subset of scontrol subcom
 | Subcommand | Scoped? | Notes |
 |---|---|---|
 | `show job [ID]` | Yes | Shows only chaperon-submitted jobs |
-| `show node/partition/config` | No | Read-only system info |
+| `show node/partition/config/step` | No | Read-only system info |
 | `hold JOBID` | Yes | Must be in scope |
 | `release JOBID` | Yes | Must be in scope |
 | `requeue JOBID` | Yes | Must be in scope |
@@ -386,14 +394,14 @@ The following commands are routed to `blocked.sh` (no handler):
 1. **No shell interpretation**: The chaperon never passes user data to `sh -c`, `eval`, or any form of shell expansion. Script content is written to files via `printf '%s\n'`, and arguments are passed as array elements.
 2. **Base64 encoding**: All user data in the protocol is base64-encoded, preventing newline injection, null byte issues, and protocol framing attacks.
 3. **Argument whitelisting**: Only explicitly allowed sbatch flags are forwarded. The whitelist is conservative — new Slurm flags must be manually added.
-4. **CWD validation**: The working directory is resolved to a physical path (following symlinks) and validated as being under the project directory.
+4. **CWD validation**: The working directory is resolved to a physical path (following symlinks) and validated as being under the project directory. Both sbatch and srun (allocation mode) perform this check.
 5. **Always wrapped**: Every job submitted through the chaperon is wrapped in `sandbox-exec.sh`, ensuring compute-node execution inherits sandbox restrictions.
 6. **FIFO security**: Communication uses named pipes in a per-session temp directory with 700 permissions. Response FIFOs use unpredictable names (mktemp) and are validated against path traversal.
 7. **Die-with-parent**: The chaperon sets `PR_SET_PDEATHSIG` and polls parent liveness every 5 seconds as a fallback.
 8. **Handler dispatch validation**: Command names are validated against `^[a-z_][a-z0-9_]*$` to prevent path traversal in handler lookup.
 9. **TOCTOU prevention**: Response FIFOs are opened to a held FD immediately after validation, and writes go through the FD (not the path).
 10. **#SBATCH directive filtering**: `#SBATCH` directives are filtered against the flag whitelist — safe directives pass through, dangerous ones are stripped.
-11. **Atomic request writes**: Request messages are built into a buffer and written atomically (single write for messages under PIPE_BUF, flock for larger ones).
+11. **Atomic request writes**: Request messages are built into a buffer and written with `flock` on the request FIFO lock file to prevent interleaving from concurrent stubs.
 12. **scancel scoping**: Job cancellation is restricted to jobs submitted by this session/project/user, preventing cancellation of other users' jobs.
 
 ## Testing

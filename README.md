@@ -76,7 +76,7 @@ The installer:
 ├── test.sh               # Test suite
 ├── agents/               # Agent profiles (auto-detected at sandbox start)
 │   ├── claude/           # Claude Code — merges CLAUDE.md + settings.json
-│   ├── codex/            # OpenAI Codex CLI — merges AGENTS.md, unblocks OPENAI_API_KEY
+│   ├── codex/            # OpenAI Codex CLI — merges AGENTS.md, unblocks OPENAI_API_KEY, CODEX_API_KEY
 │   ├── gemini/           # Google Gemini CLI — merges GEMINI.md, unblocks GOOGLE_API_KEY
 │   ├── aider/            # Aider — unblocks OPENAI_API_KEY, ANTHROPIC_API_KEY
 │   └── opencode/         # OpenCode — unblocks OPENAI_API_KEY, ANTHROPIC_API_KEY
@@ -260,7 +260,7 @@ Inside the sandbox, all Slurm authentication and binaries are **blocked** — mu
 
 - **Stub sbatch:** Parses `--wrap` and script arguments, sends them over the `CHAPERON/1` protocol to the chaperon, prints the response. The agent calls `sbatch` as normal.
 - **Stub srun:** Proxied through the chaperon like sbatch. Two modes: **allocation mode** (login node) — validates flags, wraps the command in `sandbox-exec.sh` so compute-node processes are sandboxed, then calls real srun. **Step mode** (inside an sbatch job, `SLURM_JOB_ID` set) — validates flags against a step-only whitelist and execs real srun directly for MPI/multi-process step launching. `--pty` is denied (no PTY passthrough). The chaperon runs outside the sandbox and has munge access — munge is never exposed inside the sandbox.
-- **Stub scancel:** Sends cancel requests to the chaperon, which filters job IDs by scope (session, project, or user). By default, jobs submitted by any sandbox session with the same project directory can be cancelled. Configurable via `SLURM_SCOPE` in `sandbox.conf`.
+- **Stub scancel:** Sends cancel requests to the chaperon, which filters job IDs by scope (session, project, or user). By default, jobs submitted by any sandbox session with the same project directory can be cancelled. Configurable via `SLURM_SCOPE` in `sandbox.conf`, or as an environment variable override: `SLURM_SCOPE=session sandbox-exec.sh -- claude`.
 - **Stub squeue:** Proxied through the chaperon. Output is filtered to only show jobs within scope. The agent sees only its own sandbox-submitted jobs, not other users' jobs or unrelated jobs.
 - **Stub scontrol:** Proxied through the chaperon. Read-only commands (`show node`, `show partition`, `show config`) pass through. Job operations (`show job`, `hold`, `release`, `requeue`, `update job`) are scoped to chaperon-submitted jobs. Dangerous subcommands (`shutdown`, `reconfigure`, etc.) and user-enumerating targets (`show assoc_mgr`) are denied.
 - **Stub sacct:** Proxied through the chaperon. Always scoped to the current user (`--user=$(whoami)` injected). `--allusers`, `--user`, and `--accounts` are denied to prevent viewing other users' job history.
@@ -287,7 +287,7 @@ The sandbox uses an auto-detection system to find installed agents and apply per
 
 **How it works:** At sandbox start, all `agents/*/detect.sh` are scanned. Every matching profile's paths, hidden files, and env var unblocks are merged into the global sandbox config. Then each matching agent's `overlay.sh` runs to handle config file merging.
 
-**Credentials are isolated per-agent:** The base config blocks all API keys. Each agent's `env.conf` unblocks only what it needs — Claude uses OAuth (no env vars), Codex unblocks `OPENAI_API_KEY`, Gemini unblocks `GOOGLE_API_KEY`.
+**Credentials are isolated per-agent:** The base config blocks all API keys. Each agent's `env.conf` unblocks only what it needs — Claude uses OAuth (no env vars), Codex unblocks `OPENAI_API_KEY` and `CODEX_API_KEY`, Gemini unblocks `GOOGLE_API_KEY`.
 
 Customize agent instructions via `~/.config/agent-sandbox/agents/<name>/agent.md`.
 

@@ -113,7 +113,7 @@ DENIED_WRITABLE_PATHS=()
 # program instead (see slurm-enforce/token_protect.bpf.c).
 # Can be set as SANDBOX_BYPASS_TOKEN or TOKEN_FILE (the Slurm wrapper name).
 
-# Isolate /tmp with a private tmpfs (firejail backend only).
+# Isolate /tmp with a private tmpfs (bwrap and firejail backends).
 # Default: true. Set to false if the sandboxed process needs shared /tmp
 # access (e.g., MPI shared-memory transport between ranks on the same node,
 # or NCCL inter-GPU communication via /tmp sockets).

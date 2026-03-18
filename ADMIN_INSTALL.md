@@ -15,11 +15,12 @@ A secure admin installation has two parts: a **root-owned config** (tamper-proof
 # Copy the sandbox to a root-owned directory
 sudo mkdir -p /app/lib/agent-sandbox
 sudo cp sandbox.conf sandbox-lib.sh sandbox-exec.sh \
-      sbatch-sandbox.sh srun-sandbox.sh \
+      sbatch-sandbox.sh srun-sandbox.sh sandbox-tmux.conf \
       /app/lib/agent-sandbox/
 sudo cp -r backends/ /app/lib/agent-sandbox/backends/
 sudo cp -r agents/ /app/lib/agent-sandbox/agents/
 sudo cp -r bin/ /app/lib/agent-sandbox/bin/
+sudo cp -r chaperon/ /app/lib/agent-sandbox/chaperon/
 sudo chown -R root:root /app/lib/agent-sandbox
 sudo chmod -R 755 /app/lib/agent-sandbox
 
@@ -37,6 +38,18 @@ sudo ln -s /app/lib/agent-sandbox/sandbox-exec.sh /app/bin/sandbox-exec
 ```
 
 `sandbox-lib.sh` automatically creates `~/.config/agent-sandbox/` on first run. Users customize policy by creating `user.conf` and `conf.d/*.conf` in their `~/.config/agent-sandbox/` directory. On each sandbox start, the agent detection system (`_detect_agents()`) scans `agents/*/detect.sh` to find installed agents, and `_apply_agent_profiles()` merges per-agent paths, hidden files, and env var unblocks into the global config. Each agent's `overlay.sh` handles config merging (e.g., Claude's builds `~/.claude/sandbox-config/` with merged `CLAUDE.md` and `settings.json`).
+
+Each agent profile directory (`agents/<name>/`) follows a file contract:
+
+| File | Purpose |
+|---|---|
+| `detect.sh` | Detection script — exits 0 if the agent is installed |
+| `home.conf` | `HOME_READONLY+=()` and `HOME_WRITABLE+=()` entries for the agent's dotfiles |
+| `hide.conf` | `BLOCKED_FILES+=()` entries for files to overlay with `/dev/null` |
+| `env.conf` | `BLOCKED_ENV_VARS` entries to *remove* (unblock) for this agent |
+| `overlay.sh` | Config merging script — runs after backend detection (e.g., merge `CLAUDE.md`, create `settings.json`) |
+| `agent.md` | Sandbox-awareness instructions injected into the agent's context |
+| `settings.json` | Agent-specific settings template (optional, agent-dependent) |
 
 ### What this protects
 
@@ -59,12 +72,13 @@ The sandbox loads config in layers, each adding to the previous:
 4. Per-project config (~/.config/agent-sandbox/conf.d/*.conf)      ← project-specific additions
 ```
 
-Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.config/agent-sandbox/`, identical to the user-only install (layers 2 and 3 collapse into one).
+Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.config/agent-sandbox/`, identical to the user-only install (layers 2 and 3 collapse into one). When an admin config is present but the user has not yet created `user.conf`, the sandbox accepts `~/.config/agent-sandbox/sandbox.conf` as user config — this eases the transition when an admin install is deployed after users have already customized `sandbox.conf`.
 
 ### What users can customize
 
 | Setting | User can add entries | User can remove admin entries |
 |---|---|---|
+| `ALLOWED_PROJECT_PARENTS` | Yes — add project prefixes | N/A (additive) |
 | `READONLY_MOUNTS` | Yes — mount more data read-only | N/A (additive) |
 | `EXTRA_WRITABLE_PATHS` | Yes — add writable directories (subject to `DENIED_WRITABLE_PATHS`) | N/A (additive) |
 | `DENIED_WRITABLE_PATHS` | No | **No — admin-only deny-list** |
@@ -78,6 +92,7 @@ Without an admin config, the sandbox loads a single `sandbox.conf` from `~/.conf
 | `BIND_DEV_PTS` | Yes | Yes |
 | `FILTER_PASSWD` | Yes | Yes |
 | `SANDBOX_BACKEND` | Yes | Yes |
+| `SLURM_SCOPE` | Yes | Yes |
 
 ### Admin enforcement: subprocess isolation + policy merge
 
@@ -165,6 +180,14 @@ DENIED_WRITABLE_PATHS=(
 PRIVATE_TMP=true
 FILTER_PASSWD=true
 
+# Slurm job scope: controls which jobs sandboxed agents can see/manage.
+#   "project"  — jobs from any sandbox session with the same project dir (default)
+#   "session"  — only jobs submitted by THIS sandbox session
+#   "user"     — all jobs of the current user (including non-sandbox jobs)
+#   "none"     — no scope restriction (full access to your own jobs)
+# Users can override at launch: SLURM_SCOPE=session sandbox-exec.sh ...
+SLURM_SCOPE="project"
+
 # ── Slurm Enforcement (optional — see slurm-enforce/README.md) ──
 #
 # These variables are also read by the Slurm token wrappers
@@ -179,6 +202,8 @@ FILTER_PASSWD=true
 # REAL_SRUN="/usr/libexec/slurm/srun"
 # SANDBOX_EXEC="/app/lib/agent-sandbox/sandbox-exec.sh"
 ```
+
+**`SLURM_SCOPE` environment override:** Users can override the configured `SLURM_SCOPE` at launch time without editing any config file: `SLURM_SCOPE=session sandbox-exec.sh -- claude`. The environment value is saved before config loading and restored afterward, so it takes precedence over both admin and user configs.
 
 ## Example User Config
 
@@ -304,7 +329,7 @@ SANDBOX_BACKEND=firejail ./sandbox-exec.sh -- bash
 
 The sandbox uses `--allusers` to disable firejail's built-in `/etc/passwd` filtering, which would otherwise remove UIDs >= `UID_MIN` (typically 1000) and break Slurm if the `slurm` user has a UID in that range. User enumeration prevention is handled separately by `FILTER_PASSWD=true` (default), which blocks NSS daemon sockets to prevent LDAP/AD enumeration. **Caveat:** on LDAP/AD clusters where the current user exists only in LDAP (not in local `/etc/passwd`), `FILTER_PASSWD=true` breaks user resolution and should be set to `false`. The bwrap backend handles LDAP users correctly via `/etc/passwd` overlay.
 
-**`/tmp` isolation** (`--private-tmp`): Enabled by default. Breaks MPI shared-memory transport (OpenMPI, MPICH) and NCCL inter-GPU sockets. Set `PRIVATE_TMP=false` in `sandbox.conf` for multi-rank MPI or multi-GPU workloads.
+**`/tmp` isolation** (`--private-tmp`): Enabled by default for both bwrap and firejail (controlled by `PRIVATE_TMP` in `sandbox.conf`). Breaks MPI shared-memory transport (OpenMPI, MPICH) and NCCL inter-GPU sockets. Set `PRIVATE_TMP=false` in `sandbox.conf` for multi-rank MPI or multi-GPU workloads.
 
 **Supplementary groups**: Preserved (no `--nogroups`). HPC file access relies on supplementary groups for lab data directories.
 
