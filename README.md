@@ -300,7 +300,22 @@ The outer tmux socket is blocked (escape risk). A nested tmux runs inside the sa
 ## Troubleshooting
 
 ### "bwrap: No such file or directory"
-Install bubblewrap: `sudo apt install bubblewrap` (Debian/Ubuntu), `sudo dnf install bubblewrap` (RHEL/Fedora), or `brew install bubblewrap` (user-local, no root).
+
+Install bubblewrap via your system package manager (needs root):
+```bash
+sudo apt install bubblewrap    # Debian/Ubuntu
+sudo dnf install bubblewrap    # RHEL/Fedora/Rocky
+```
+
+**No root access?** Install via [Homebrew](https://brew.sh/) (a package manager that installs into your home directory — no root needed, widely used on HPC clusters for user-local tools):
+```bash
+# Install Homebrew itself (one-time, ~2 min)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Follow the instructions it prints to add brew to your PATH, then:
+brew install bubblewrap
+```
+Homebrew installs to `~/.linuxbrew/` and doesn't touch system directories. The sandbox auto-detects bwrap from `$PATH` including `~/.linuxbrew/bin/`.
 
 ### "bwrap: Creating new namespace failed: Operation not permitted"
 The kernel doesn't allow unprivileged user namespaces. Check: `cat /proc/sys/kernel/unprivileged_userns_clone` — it must be `1`.
