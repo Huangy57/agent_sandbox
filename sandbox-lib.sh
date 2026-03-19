@@ -146,6 +146,10 @@ FILTER_PASSWD=true
 # to inject keystrokes into unsandboxed terminals. See sandbox.conf.
 BIND_DEV_PTS=false
 
+# Suppress the startup banner. Set to true to hide the one-line message
+# showing backend, project dir, and home access mode.
+SANDBOX_QUIET=false
+
 # Backend selection. Empty means auto-detect (bwrap > firejail > landlock).
 # Can be overridden by --backend flag, SANDBOX_BACKEND env, or config file.
 # Preserve any value from env/CLI before setting the default — the override
@@ -254,7 +258,7 @@ _CONFIG_ARRAYS=(
 )
 _CONFIG_SCALARS=(
     SANDBOX_BACKEND PRIVATE_TMP FILTER_PASSWD BIND_DEV_PTS
-    SLURM_SCOPE HOME_ACCESS
+    SLURM_SCOPE HOME_ACCESS SANDBOX_QUIET
 )
 # Enforced arrays: user cannot remove admin-set entries (only add).
 _ENFORCED_ARRAYS=(BLOCKED_FILES BLOCKED_ENV_VARS EXTRA_BLOCKED_PATHS)
@@ -867,9 +871,7 @@ _detect_agents() {
         fi
     done
 
-    if [[ ${#_DETECTED_AGENTS[@]} -gt 0 ]]; then
-        echo "sandbox: detected agents: ${_DETECTED_AGENTS[*]}" >&2
-    fi
+    : # agents stored in _DETECTED_AGENTS for _apply_agent_profiles
 }
 
 # _apply_agent_profiles — merge each agent's config.conf into globals

@@ -84,6 +84,7 @@ fi
 # This allows users to override with: SLURM_SCOPE=session sandbox-exec.sh ...
 _SLURM_SCOPE_ENV="${SLURM_SCOPE:-}"
 _HOME_ACCESS_ENV="${HOME_ACCESS:-}"
+_SANDBOX_QUIET_ENV="${SANDBOX_QUIET:-}"
 
 source "$SCRIPT_DIR/sandbox-lib.sh"
 
@@ -118,6 +119,9 @@ fi
 # Restore env overrides (saved before config loading)
 if [[ -n "${_HOME_ACCESS_ENV:-}" ]]; then
     HOME_ACCESS="$_HOME_ACCESS_ENV"
+fi
+if [[ -n "${_SANDBOX_QUIET_ENV:-}" ]]; then
+    SANDBOX_QUIET="$_SANDBOX_QUIET_ENV"
 fi
 
 # Validate HOME_ACCESS
@@ -212,6 +216,11 @@ if [[ -d /proc/self/fd ]]; then
             eval "exec ${_fd_num}>&-" 2>/dev/null || true
         fi
     done
+fi
+
+# Startup banner (disable with SANDBOX_QUIET=true in sandbox.conf or env)
+if ! _is_true "${SANDBOX_QUIET:-false}"; then
+    echo "sandbox: $SANDBOX_BACKEND | project: $PROJECT_DIR | home: ${HOME_ACCESS:-restricted}" >&2
 fi
 
 backend_exec "$@"
