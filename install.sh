@@ -85,21 +85,15 @@ if command -v bwrap &>/dev/null; then
             BWRAP_PATH="$(command -v bwrap)"
             echo "  AppArmor restricts unprivileged user namespaces on this system."
             echo ""
-            echo "  To enable bwrap, ask your sysadmin to apply ONE of these fixes:"
+            echo "  Ask your sysadmin to create /etc/apparmor.d/bwrap-sandbox with:"
             echo ""
-            echo "  Option 1 — AppArmor profile for bwrap (recommended, scoped):"
-            echo "    Create /etc/apparmor.d/bwrap with:"
+            echo "    abi <abi/4.0>,"
+            echo "    include <tunables/global>"
+            echo "    profile bwrap-sandbox $BWRAP_PATH flags=(unconfined) {"
+            echo "      userns,"
+            echo "    }"
             echo ""
-            echo "      abi <abi/4.0>,"
-            echo "      include <tunables/global>"
-            echo "      profile bwrap $BWRAP_PATH flags=(unconfined) {"
-            echo "        userns,"
-            echo "      }"
-            echo ""
-            echo "    Then: sudo apparmor_parser -r /etc/apparmor.d/bwrap"
-            echo ""
-            echo "  Option 2 — Disable the restriction globally (easier, broader):"
-            echo "    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
+            echo "  Then: sudo apparmor_parser -r /etc/apparmor.d/bwrap-sandbox"
             echo ""
         elif [[ -f /proc/sys/kernel/unprivileged_userns_clone ]] \
              && [[ "$(cat /proc/sys/kernel/unprivileged_userns_clone)" != "1" ]]; then
@@ -107,15 +101,14 @@ if command -v bwrap &>/dev/null; then
             echo "  Ask your sysadmin: sudo sysctl -w kernel.unprivileged_userns_clone=1"
         fi
     fi
-elif command -v brew &>/dev/null; then
-    echo "→ Installing bubblewrap via Homebrew..."
-    brew install bubblewrap
-    if bwrap --ro-bind / / true 2>/dev/null; then
-        AVAILABLE_BACKENDS+=(bwrap)
-        echo "  ✓ bubblewrap installed: $(bwrap --version)"
-    else
-        echo "  ⚠ bubblewrap installed but cannot create namespaces"
-    fi
+else
+    echo "· bubblewrap not found"
+    echo "  bwrap provides the strongest sandbox (mount namespace, PID namespace)."
+    echo "  Install options:"
+    echo "    System-wide (recommended):  sudo apt install bubblewrap"
+    echo "    User-local (no root):       brew install bubblewrap"
+    echo "    From source:                https://github.com/containers/bubblewrap"
+    echo ""
 fi
 
 # Check firejail
@@ -139,11 +132,24 @@ if [[ ${#AVAILABLE_BACKENDS[@]} -eq 0 ]]; then
     echo ""
     echo "ERROR: No sandbox backend available."
     echo ""
-    echo "  Options:"
-    echo "    1. Install bubblewrap: brew install bubblewrap"
-    echo "    2. Install firejail: sudo apt install firejail"
-    echo "    3. Use a Linux kernel ≥ 5.13 with Landlock enabled"
+    echo "  Install one of these (in order of recommendation):"
     echo ""
+    echo "  1. bubblewrap (strongest — mount + PID namespace, unprivileged):"
+    echo "     sudo apt install bubblewrap        # Debian/Ubuntu"
+    echo "     sudo dnf install bubblewrap        # RHEL/Fedora"
+    echo "     brew install bubblewrap            # user-local, no root"
+    echo ""
+    echo "  2. firejail (strong — setuid root binary, works without user namespaces):"
+    echo "     sudo apt install firejail          # Debian/Ubuntu"
+    echo ""
+    echo "  3. Landlock (weakest — kernel ≥ 5.13 with CONFIG_SECURITY_LANDLOCK):"
+    echo "     No install needed, but your kernel may not support it."
+    echo ""
+    if "$BWRAP_BLOCKED"; then
+        echo "  Note: bwrap IS installed but cannot create namespaces."
+        echo "  See the instructions above to fix this."
+        echo ""
+    fi
     exit 1
 fi
 
