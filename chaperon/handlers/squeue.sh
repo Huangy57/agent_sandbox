@@ -68,8 +68,11 @@ handle_squeue() {
 
     local scope="${SLURM_SCOPE:-project}"
 
-    # Parse and validate arguments
+    # Parse and validate arguments.
+    # Track whether the user explicitly passed -j/--jobs so we don't
+    # inject a duplicate -j (Slurm chokes on duplicate -j flags).
     local validated_flags=()
+    local user_job_ids=""
     local i=0
     while (( i < ${#REQ_ARGS[@]} )); do
         local arg="${REQ_ARGS[$i]}"
@@ -84,6 +87,16 @@ handle_squeue() {
                 ;;
             --user=*|--account=*|--me)
                 # Self-contained — just skip
+                ;;
+            # Capture -j/--jobs value separately to avoid duplicate -j
+            -j|--jobs)
+                if (( i + 1 < ${#REQ_ARGS[@]} )); then
+                    (( i++ )) || true
+                    user_job_ids="${REQ_ARGS[$i]}"
+                fi
+                ;;
+            --jobs=*)
+                user_job_ids="${arg#--jobs=}"
                 ;;
             --*=*)
                 if _is_squeue_allowed "$arg"; then
@@ -126,11 +139,42 @@ handle_squeue() {
     # For "user" and "none" scopes, just show all user jobs directly
     if [[ "$scope" == "user" || "$scope" == "none" ]]; then
         local rc=0
-        "$real_squeue" --me "${validated_flags[@]}" | _strip_chaperon_tags || rc=$?
+        local job_args=()
+        [[ -n "$user_job_ids" ]] && job_args=(-j "$user_job_ids")
+        "$real_squeue" --me "${job_args[@]}" "${validated_flags[@]}" | _strip_chaperon_tags || rc=$?
         return "$rc"
     fi
 
-    # For session/project scopes, filter by chaperon tag
+    # For session/project scopes, filter by chaperon tag.
+    # If the user explicitly requested specific job IDs (-j), validate
+    # each one against the scope instead of injecting a scoped job list.
+    if [[ -n "$user_job_ids" ]]; then
+        # User asked for specific jobs — validate each is in scope
+        local scoped_job_ids
+        scoped_job_ids="$(_get_scoped_jobs "$scope" "$project_dir")"
+
+        # Check each requested job against scoped set
+        local requested_ids validated_ids=""
+        IFS=',' read -ra requested_ids <<< "$user_job_ids"
+        for _req_id in "${requested_ids[@]}"; do
+            local _base_id="${_req_id%%_*}"  # strip array suffix
+            if echo "$scoped_job_ids" | grep -qE "^${_base_id}(_|$)"; then
+                [[ -n "$validated_ids" ]] && validated_ids+=","
+                validated_ids+="$_req_id"
+            fi
+        done
+
+        if [[ -z "$validated_ids" ]]; then
+            # None of the requested jobs are in scope
+            return 0
+        fi
+
+        local rc=0
+        "$real_squeue" --me -j "$validated_ids" "${validated_flags[@]}" | _strip_chaperon_tags || rc=$?
+        return "$rc"
+    fi
+
+    # No explicit -j: show all jobs in scope
     local scoped_job_ids
     scoped_job_ids="$(_get_scoped_jobs "$scope" "$project_dir")"
 
