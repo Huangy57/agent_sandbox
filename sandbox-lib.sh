@@ -97,12 +97,12 @@ HOME_WRITABLE=(
 )
 
 # Home access mode:
-#   restricted — (default) tmpfs HOME, selective mounts, read-only base
-#   tmpwrite   — like restricted but tmpfs is writable (ephemeral writes, lost on exit)
+#   tmpwrite   — (default) tmpfs HOME, selective mounts, writable tmpfs (ephemeral writes, lost on exit)
+#   restricted — like tmpwrite but tmpfs is read-only (strictest)
 #   read       — full real HOME readable; .ssh/.aws/.gnupg still hidden
 #   write      — full real HOME writable; .ssh/.aws/.gnupg still hidden
 # Can override via env: HOME_ACCESS=read sandbox-exec.sh -- bash
-HOME_ACCESS="restricted"
+HOME_ACCESS="tmpwrite"
 
 # Credential dirs that are ALWAYS hidden regardless of HOME_ACCESS mode.
 # In restricted mode these are hidden implicitly (never listed in HOME_READONLY).

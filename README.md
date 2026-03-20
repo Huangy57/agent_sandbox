@@ -151,7 +151,7 @@ cd /path/to/my-project
 # Then: agent-sandbox claude
 ```
 
-The agent starts in your project directory with full read access to the HPC but write access **only** to that directory. SSH keys, API tokens, and credentials are invisible. Agent profiles are auto-detected — if both Claude and Codex are installed, both profiles activate simultaneously (each gets its own writable paths and credential access).
+The agent starts in your project directory with full read access to the HPC but write access **only** to that directory (plus ephemeral writes anywhere in `$HOME` — see [Home Access Modes](#home-access-modes)). SSH keys, API tokens, and credentials are invisible. Agent profiles are auto-detected — if both Claude and Codex are installed, both profiles activate simultaneously (each gets its own writable paths and credential access).
 
 ### Verify the Sandbox
 
@@ -172,6 +172,21 @@ $EDITOR ~/.config/agent-sandbox/sandbox.conf
 ```
 
 Changes take effect the next time you start a sandbox — no reinstall needed.
+
+### Home Access Modes
+
+The `HOME_ACCESS` setting in `sandbox.conf` controls how much of your home directory the agent can see and modify:
+
+| Mode | Real files visible? | Agent can write? | Writes persist? | Use case |
+|------|-------------------|-----------------|-----------------|----------|
+| **`tmpwrite`** (default) | Only listed paths | Anywhere in `$HOME` | **No** — lost on exit | Recommended: agents can create dotfiles, caches, lock files without errors, but nothing leaks between sessions |
+| `restricted` | Only listed paths | Only listed writable paths | Yes | Maximum lockdown — unlisted writes get "Read-only file system" errors |
+| `read` | Everything | Only listed writable + project dir | Yes | Agent needs to read arbitrary dotfiles or configs |
+| `write` | Everything | Everything | Yes | Full access — use with caution |
+
+The default `tmpwrite` mode blanks `$HOME` with a tmpfs, re-mounts only the paths in `HOME_READONLY` and `HOME_WRITABLE`, but leaves the tmpfs writable. This means the agent can freely create files (lock files, caches, temp directories) anywhere in `$HOME`, but those writes vanish when the sandbox exits. Real home content not in the mount lists remains hidden. Credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`) are always blocked regardless of mode.
+
+Override per-session via environment: `HOME_ACCESS=read sandbox-exec.sh -- bash`
 
 ### Review your config
 
