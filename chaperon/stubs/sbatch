@@ -4,6 +4,14 @@
 # Sends sbatch requests to the chaperon process via named pipes (_CHAPERON_FIFO_DIR).
 # Runs INSIDE the sandbox; the chaperon validates, wraps, and submits
 # the job on the outside.
+#
+# NOTE: Unlike all other stubs (which are trivial `chaperon_call <cmd> "$@"`
+# passthroughs), this stub does client-side argument parsing.  This is
+# intentional: sbatch takes a script *file* as a positional argument, and that
+# file may live on a sandbox tmpfs that the handler (running outside) cannot read.
+# So the stub must extract the script content here and send it via the SCRIPT
+# protocol field.  The handler then only sees validated flags + inline script.
+# srun has no script-file argument, so its stub needs no parsing.
 
 set -euo pipefail
 
@@ -50,6 +58,56 @@ fi
 # No --wrap: look for a script file among the forward args.
 # Strategy: walk args with flag-value awareness to find the first
 # bare positional that is a readable file.
+#
+# We use a known list of flags that consume a value argument so we
+# can correctly distinguish "flag value" pairs from positional args
+# (the script file).  Without this, boolean flags like --parsable
+# cause the next positional to be mistaken for a flag value.
+
+# Flags that consume a subsequent value token (space-separated form).
+# Keep in sync with _SBATCH_VALUE_FLAGS in handlers/_handler_lib.sh.
+_STUB_VALUE_FLAGS=" \
+  -A --account \
+  -c --cpus-per-task \
+  -d --dependency \
+  -e --error \
+  -J --job-name \
+  -n --ntasks \
+  -N --nodes \
+  -o --output \
+  -p --partition \
+  -q --qos \
+  -t --time \
+  -G --gpus \
+  -w --nodelist \
+  -x --exclude \
+  --begin \
+  --comment \
+  --constraint \
+  --cpu-freq \
+  --deadline \
+  --gres \
+  --gpus-per-node \
+  --gpus-per-task \
+  --mail-type \
+  --mail-user \
+  --mem \
+  --mem-per-cpu \
+  --mem-per-gpu \
+  --nice \
+  --ntasks-per-node \
+  --cpus-per-gpu \
+  --priority \
+  --reservation \
+  --signal \
+  --switches \
+  --threads-per-core \
+  --tmp \
+  --wait-all-nodes \
+  --wckey \
+  --array \
+"
+
 FINAL_ARGS=()
 skip_next=false
 
@@ -68,8 +126,9 @@ for (( i=0; i < ${#FORWARD_ARGS[@]}; i++ )); do
             ;;
         -*)
             FINAL_ARGS+=("$arg")
-            # Peek: if next arg doesn't start with -, it's likely a value
-            if (( i + 1 < ${#FORWARD_ARGS[@]} )) && [[ "${FORWARD_ARGS[$((i+1))]}" != -* ]]; then
+            # Only skip the next token if this flag takes a value
+            if [[ "$_STUB_VALUE_FLAGS" == *" $arg "* ]] \
+               && (( i + 1 < ${#FORWARD_ARGS[@]} )); then
                 skip_next=true
             fi
             ;;
