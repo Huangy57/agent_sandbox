@@ -73,7 +73,20 @@ BWRAP_BLOCKED=false
 
 # Check bwrap
 if command -v bwrap &>/dev/null; then
-    if bwrap --ro-bind / / true 2>/dev/null; then
+    _bwrap_ver=$(bwrap --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
+    _bwrap_major=${_bwrap_ver%%.*}
+    _bwrap_rest=${_bwrap_ver#*.}
+    _bwrap_minor=${_bwrap_rest%%.*}
+    _bwrap_too_old=false
+    if (( _bwrap_major == 0 && _bwrap_minor < 4 )); then
+        _bwrap_too_old=true
+    fi
+
+    if "$_bwrap_too_old"; then
+        echo "⚠ bubblewrap ${_bwrap_ver} is too old (need ≥ 0.4.0 for --chmod, --unsetenv)"
+        echo "  Install a newer version: https://github.com/containers/bubblewrap/releases"
+        echo "  Or use Homebrew: brew install bubblewrap"
+    elif bwrap --ro-bind / / true 2>/dev/null; then
         AVAILABLE_BACKENDS+=(bwrap)
         echo "✓ bubblewrap available: $(bwrap --version)"
     else

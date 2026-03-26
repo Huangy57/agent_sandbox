@@ -976,6 +976,11 @@ detect_backend() {
             echo "  Host:   $(hostname 2>/dev/null || echo unknown)" >&2
             echo "  Kernel: $(uname -r 2>/dev/null || echo unknown)" >&2
             echo "  LSMs:   $(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)" >&2
+            if [[ "$SANDBOX_BACKEND" == "bwrap" ]] && command -v bwrap &>/dev/null; then
+                local _bv
+                _bv=$(bwrap --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
+                echo "  bwrap:  $_bv (need ≥ 0.4.0 for --chmod, --unsetenv)" >&2
+            fi
             exit 1
         fi
         return

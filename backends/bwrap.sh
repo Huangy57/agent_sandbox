@@ -21,6 +21,16 @@ _resolve_bwrap() {
 backend_available() {
     _resolve_bwrap
     [[ -x "${BWRAP:-}" ]] || return 1
+
+    # Minimum version: 0.4.0 (for --chmod, --unsetenv)
+    local _ver
+    _ver=$("$BWRAP" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+') || return 1
+    local _major _minor _patch
+    IFS='.' read -r _major _minor _patch <<< "$_ver"
+    if (( _major == 0 && _minor < 4 )); then
+        return 1
+    fi
+
     # Quick smoke test: can bwrap actually create a user namespace?
     "$BWRAP" --ro-bind / / true 2>/dev/null
 }
