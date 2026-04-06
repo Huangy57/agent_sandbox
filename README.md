@@ -45,9 +45,18 @@ For the full architecture and security analysis, see [Chaperon: Secure Slurm Pro
 ### Prerequisites
 
 - Linux HPC with Slurm (kernel ≥ 3.8)
-- **Bubblewrap backend** (recommended): `sudo apt install bubblewrap` or `sudo dnf install bubblewrap`. No root? [Install via Homebrew](#bwrap-no-such-file-or-directory) (`brew install bubblewrap` — installs to `~/.linuxbrew/`, no root needed). Requires unprivileged user namespaces. On Ubuntu 24.04+, AppArmor may need an admin profile — see [Troubleshooting](#setting-up-uid-map-permission-denied-ubuntu-2404).
+- **Bubblewrap backend** (recommended): `sudo apt install bubblewrap` or `sudo dnf install bubblewrap`. Requires unprivileged user namespaces. On Ubuntu 24.04+, AppArmor may need an admin profile — see [Troubleshooting](#setting-up-uid-map-permission-denied-ubuntu-2404).
 - **Firejail backend**: `sudo apt install firejail` (setuid root binary). Works when AppArmor blocks unprivileged user namespaces.
 - **Landlock backend**: kernel ≥ 5.13 (Ubuntu 22.04+), Python 3. No install needed but weakest isolation.
+
+**No root access?** Install bubblewrap via [Homebrew](https://brew.sh/) — no sudo needed:
+```bash
+mkdir -p ~/.linuxbrew
+curl -fsSL https://github.com/Homebrew/brew/tarball/master \
+  | tar xz --strip-components=1 -C ~/.linuxbrew
+eval "$(~/.linuxbrew/bin/brew shellenv)"  # add to .bashrc to persist
+brew install bubblewrap
+```
 
 ### One-Command Setup
 
