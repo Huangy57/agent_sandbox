@@ -100,7 +100,7 @@ Neither approach provides complete isolation. Both share these weaknesses:
 | **Network not isolated** | Shared host network (all backends). Agent can exfiltrate data via HTTP, DNS, or SSH. | Shared host network by default. `--net` available but breaks Slurm/munge. |
 | **Abstract Unix sockets** | Accessible since bwrap/firejail share the network namespace. `@/org/freedesktop/...` reachable. | Accessible (shared network namespace). |
 | **SSH escape** | If `~/.ssh` is exposed, agent can SSH to localhost for an unsandboxed shell. | `$HOME` bind-mounted by default, so `~/.ssh` is exposed unless `--contain` is used. |
-| **`/dev/shm` shared** | Writable and not isolated by default. Covert cross-sandbox IPC possible. | Writable and shared by default. |
+| **`/dev/shm` / IPC** | Isolated on bwrap (`--unshare-ipc`) and firejail (`--ipc-namespace`). Shared on Landlock. | Writable and shared by default. |
 | **`memfd_create`** | Not blocked (needed by CUDA, PyTorch, JAX). Docker's default seccomp profile also allows it. `userfaultfd` and `io_uring` are blocked by all three backends via seccomp. | Not blocked (no seccomp by default). |
 | **Slurm wrapping** | Soft boundary. Munge auth available, PATH shadowing bypassable (see [Admin Hardening §1](ADMIN_HARDENING.md#1-enforce-sandbox-on-agent-submitted-slurm-jobs)). | No wrapping at all. Slurm fully accessible. |
 
@@ -108,7 +108,8 @@ The sandbox has additional backend-specific gaps documented in the [README's Kno
 
 - **Landlock** cannot block Unix socket `connect()` (D-Bus/systemd escape), has no PID namespace, no mount namespace (BLOCKED_FILES and PRIVATE_TMP ineffective), and no LDAP user enumeration filtering.
 - **bwrap** seccomp filter is generated at runtime (`generate-seccomp.py`) — verify it loads (no "seccomp" warnings on stderr).
-- **All backends** leave IPC namespace and network namespace shared by default. `/dev/shm` and abstract Unix sockets are covert channels between sandbox sessions.
+- **Landlock** leaves IPC namespace shared (`/dev/shm` writable by all same-UID processes). Bwrap and firejail isolate IPC by default.
+- **All backends** leave the network namespace shared. Abstract Unix sockets are covert channels between sandbox sessions.
 
 The key difference is not that the sandbox has no gaps (it does), but that its gaps are smaller and better characterized. Apptainer's default posture exposes the entire host environment; the sandbox's default posture hides everything and selectively re-exposes what is needed. Both require admin hardening for strong isolation (see [Admin Hardening §§1-5](ADMIN_HARDENING.md#summary)).
 
