@@ -75,6 +75,7 @@ backend_prepare() {
         --seccomp.drop=io_uring_setup,io_uring_enter,io_uring_register,userfaultfd,kexec_load,kexec_file_load
         --nosound
         --no3d
+        --ipc-namespace
         --restrict-namespaces
         --allusers
         # --allusers: disable /etc/passwd filtering. Firejail removes UIDs

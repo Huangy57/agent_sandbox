@@ -261,7 +261,7 @@ For Claude Code, the sandbox overlays `~/.claude/settings.json` to auto-allow to
 | **Network** | Not isolated | Not isolated | Not isolated |
 | **`/run` (system sockets)** | tmpfs + selective bind (munge, nscd, resolved) | Blacklist (dbus, systemd, containerd) | Full access |
 | **Abstract Unix sockets** | Accessible | Accessible | Accessible |
-| **IPC / `/dev/shm`** | Shared | Shared | Shared |
+| **IPC / `/dev/shm`** | Isolated | Isolated | Shared |
 | **Syscalls (seccomp)** | io_uring + userfaultfd + kexec blocked (generated BPF filter) | Built-in + io_uring + userfaultfd + kexec blocked | io_uring + userfaultfd + kexec + ptrace + process_vm_readv/writev (kernel ≥ 5.13 only) |
 | **User enumeration** | Filtered (`FILTER_PASSWD`) | Filtered (`FILTER_PASSWD`) | Not filtered |
 | **Slurm (chaperon)** | Munge + binaries + config blocked; chaperon proxy | Munge + binaries + config blocked; chaperon proxy | Munge not granted; chaperon proxy |
@@ -272,7 +272,7 @@ For Claude Code, the sandbox overlays `~/.claude/settings.json` to auto-allow to
 
 **Abstract Unix sockets** (`@/org/...`) bypass filesystem isolation because they live in the network namespace, not on the filesystem. Isolating them requires a separate network namespace (`--unshare-net` / `--net=none`), which would break Claude Code's API access and Slurm connectivity. On systems with `systemd --user`, an abstract D-Bus socket could be used for sandbox escape — see [Admin Hardening](ADMIN_HARDENING.md).
 
-**IPC / `/dev/shm`** is shared because MPI, NCCL, and CUDA use it for inter-process communication and GPU coordination. Isolating it (`--unshare-ipc` / `--ipc-namespace`) would break multi-process HPC workloads. Can be enabled in `sandbox.conf` if not needed.
+**IPC / `/dev/shm`** is isolated on bwrap (`--unshare-ipc`) and firejail (`--ipc-namespace`). Each sandbox gets its own `/dev/shm` and SysV IPC namespace, preventing the agent from reading or corrupting shared memory of processes outside the sandbox. This is safe for HPC workloads: `sbatch` jobs run entirely within a single sandbox, so all MPI ranks, NCCL collectives, and CUDA IPC within a job share the same IPC namespace. Landlock cannot isolate IPC (no namespace support).
 
 **Environment variables:** The sandbox inherits your shell environment, blocks specific names via `BLOCKED_ENV_VARS`, and blocks credential-pattern globs via `BLOCKED_ENV_PATTERNS` (`*_TOKEN`, `SSH_*`, `CI_*`, etc.). To grant access, add the variable to `ALLOWED_ENV_VARS`.
 
@@ -448,7 +448,7 @@ Sorted by perceived severity (security impact first, then operational issues).
 | **bwrap** (`BIND_DEV_PTS=true`) | Host `/dev` exposure — required for tmux on kernels < 5.4. On kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals outside the sandbox | Default `false` (safe). Upgrade to kernel ≥ 5.4 to avoid the need, or ≥ 6.2 to disable TIOCSTI entirely |
 | **Landlock** | Host `/dev/pts/*` always visible (no mount namespace). On kernels < 6.2, `TIOCSTI` ioctl allows keystroke injection into same-user terminals — unlike bwrap, this is not opt-in | Kernel ≥ 6.2 disables TIOCSTI system-wide. Use bwrap or firejail for private `/dev` |
 | **All** | Agent config directories (e.g., `~/.claude/`, `~/.codex/`) are writable (required for agents to function). An agent in one project can read session data from other projects | Inherent requirement — agents need write access to their config directories. Cross-project data access could be mitigated by per-project config copies |
-| **All** | `/dev/shm` is writable and shared (IPC namespace not isolated by default) — could be used for covert cross-sandbox communication | `firejail --ipc-namespace`, `bwrap --unshare-ipc` |
+| **Landlock** | `/dev/shm` is writable and shared (no IPC namespace) — could be used for covert cross-sandbox communication or to read/corrupt shared memory of same-UID processes | Use bwrap or firejail (both isolate IPC by default) |
 | **Landlock** | User enumeration via LDAP/AD — `getent passwd` reveals all directory users | No mount namespace to overlay files or block sockets; set `FILTER_PASSWD=false` if LDAP lookups are needed |
 | **bwrap/Firejail** | `/tmp` isolated by default (`PRIVATE_TMP=true`) — breaks MPI shared-memory transport and NCCL inter-GPU sockets | Set `PRIVATE_TMP=false` in `sandbox.conf` for HPC multi-process workloads |
 | **All** | Environment variable blocking uses explicit names (`BLOCKED_ENV_VARS`) and glob patterns (`BLOCKED_ENV_PATTERNS` — e.g. `*_TOKEN`, `SSH_*`, `CI_*`). Patterns catch most credential conventions automatically, but secrets with unusual names may slip through | Review your environment (`env \| grep -iE 'token\|key\|secret\|auth'`), add names to `BLOCKED_ENV_VARS` or patterns to `BLOCKED_ENV_PATTERNS`, and use `ALLOWED_ENV_VARS` to override. See [Admin Hardening](ADMIN_HARDENING.md) for an allowlist approach |

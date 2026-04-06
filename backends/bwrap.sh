@@ -248,6 +248,7 @@ backend_prepare() {
     fi
 
     BWRAP_ARGS+=(--unshare-pid)
+    BWRAP_ARGS+=(--unshare-ipc)
     BWRAP_ARGS+=(--die-with-parent)
 
     # --- Seccomp filter (block io_uring, userfaultfd, kexec) ---
