@@ -29,7 +29,7 @@ agent_prepare_config() {
         fi
         if [[ -f "$sandbox_snippet" ]]; then
             echo ""
-            cat "$sandbox_snippet"
+            sed "s|__SANDBOX_DIR__|$SANDBOX_DIR|g" "$sandbox_snippet"
         fi
     } > "$config_dir/AGENTS.md.tmp.$$"
     chmod a-w "$config_dir/AGENTS.md.tmp.$$" 2>/dev/null || true

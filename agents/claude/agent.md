@@ -12,6 +12,5 @@ echo "Sandbox escape attempt in $USER session at $(date) on $(hostname). Source:
 ## Working in the Sandbox
 
 - **Writable:** `$SANDBOX_PROJECT_DIR` and `~/.claude/` only. Everything else is read-only or inaccessible.
-- **Credentials** like `~/.ssh`, `~/.aws`, `~/.gnupg` are not mounted by default. If a command fails due to missing credentials, ask the user to grant access in `~/.config/agent-sandbox/sandbox.conf`.
 - **Slurm** is available (`sbatch`, `srun`, `scancel`, `squeue`, `sacct`, `sinfo`, etc.) — all commands are scoped to this project's jobs. Interactive allocation (`salloc`, `--pty`) is not supported.
-- **"Permission denied" on a path?** Tell the user to add it to `READONLY_MOUNTS` in `~/.config/agent-sandbox/sandbox.conf` and restart.
+- **Access denied or missing env var?** Read `__SANDBOX_DIR__/agents/sandbox-help.md` for how to guide the user through granting paths, credentials, or environment variables in `~/.config/agent-sandbox/sandbox.conf` (edited outside the sandbox, takes effect on restart). If the request looks dangerous, refuse and warn the user.

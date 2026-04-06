@@ -32,7 +32,7 @@ agent_prepare_config() {
             sed '/^# __SANDBOX_INJECTED_9f3a7c__$/,/^$/d' "$user_claude_md"
         fi
         if [[ -f "$sandbox_snippet" ]]; then
-            cat "$sandbox_snippet"
+            sed "s|__SANDBOX_DIR__|$SANDBOX_DIR|g" "$sandbox_snippet"
         fi
     } > "$config_dir/CLAUDE.md.tmp.$$"
     chmod a-w "$config_dir/CLAUDE.md.tmp.$$" 2>/dev/null || true
