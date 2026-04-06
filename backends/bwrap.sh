@@ -248,7 +248,16 @@ backend_prepare() {
     fi
 
     BWRAP_ARGS+=(--unshare-pid)
-    BWRAP_ARGS+=(--unshare-ipc)
+
+    # IPC namespace isolation: gives sandbox its own SysV IPC + /dev/shm.
+    # Disable via PRIVATE_IPC=false in sandbox.conf if you need cross-sandbox
+    # or host-to-sandbox shared memory (rare — MPI within a single job is fine
+    # because all ranks share the same sandbox).
+    if _is_true "${PRIVATE_IPC:-true}"; then
+        BWRAP_ARGS+=(--unshare-ipc)
+        BWRAP_ARGS+=(--tmpfs /dev/shm --chmod 1777 /dev/shm)
+    fi
+
     BWRAP_ARGS+=(--die-with-parent)
 
     # --- Seccomp filter (block io_uring, userfaultfd, kexec) ---

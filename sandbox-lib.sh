@@ -130,7 +130,19 @@ DENIED_WRITABLE_PATHS=()
 # Default: true. Set to false if the sandboxed process needs shared /tmp
 # access (e.g., MPI shared-memory transport between ranks on the same node,
 # or NCCL inter-GPU communication via /tmp sockets).
+# Preserve env overrides for security booleans before setting defaults.
+# Restored after config loading (but admin enforcement still wins).
+_PRIVATE_TMP_OVERRIDE="${PRIVATE_TMP:-}"
+_PRIVATE_IPC_OVERRIDE="${PRIVATE_IPC:-}"
+_FILTER_PASSWD_OVERRIDE="${FILTER_PASSWD:-}"
+
 PRIVATE_TMP=true
+
+# IPC namespace isolation. Gives each sandbox its own SysV IPC namespace
+# and a private /dev/shm. Prevents host or cross-sandbox shared memory access.
+# MPI/NCCL within a single job are unaffected (all ranks share one sandbox).
+# Default: true. Set to false for workloads needing host-to-sandbox shm.
+PRIVATE_IPC=true
 
 # Filter /etc/passwd inside the sandbox to prevent LDAP/AD user enumeration.
 # When true, generates a minimal /etc/passwd (system UIDs < 1000 + current
@@ -323,7 +335,7 @@ _CONFIG_ARRAYS=(
     EXTRA_BLOCKED_PATHS EXTRA_WRITABLE_PATHS DENIED_WRITABLE_PATHS
 )
 _CONFIG_SCALARS=(
-    SANDBOX_BACKEND PRIVATE_TMP FILTER_PASSWD BIND_DEV_PTS
+    SANDBOX_BACKEND PRIVATE_TMP PRIVATE_IPC FILTER_PASSWD BIND_DEV_PTS
     SLURM_SCOPE HOME_ACCESS SANDBOX_QUIET SANDBOX_NPROC_LIMIT
 )
 # Enforced arrays: user cannot remove admin-set entries (only add).
@@ -544,6 +556,18 @@ _enforce_admin_policy() {
         done
     done
 
+    # Security-critical booleans: user can harden (false→true) but not
+    # weaken (true→false) an admin-set value.
+    local _bool_name _admin_val _user_val
+    for _bool_name in PRIVATE_TMP PRIVATE_IPC FILTER_PASSWD; do
+        eval "_admin_val=\"\${_ADMIN_${_bool_name}:-}\""
+        eval "_user_val=\"\${${_bool_name}:-}\""
+        if _is_true "$_admin_val" && ! _is_true "$_user_val"; then
+            echo "WARNING: ${_label} weakened admin-enforced ${_bool_name}=true → restored." >&2
+            eval "${_bool_name}=true"
+        fi
+    done
+
     # --- Collect user-only additions (items not in admin snapshot) ---
     # Save the user's arrays before restoring admin values.
     local _user_bf=("${BLOCKED_FILES[@]}")
@@ -683,6 +707,11 @@ _snapshot_admin_config() {
     _ADMIN_ALLOWED_PROJECT_PARENTS=("${ALLOWED_PROJECT_PARENTS[@]}")
     _ADMIN_SANDBOX_BYPASS_TOKEN="${SANDBOX_BYPASS_TOKEN:-}"
     _ADMIN_TOKEN_FILE="${TOKEN_FILE:-}"
+
+    # Security-critical booleans: snapshot so users cannot weaken them.
+    _ADMIN_PRIVATE_TMP="${PRIVATE_TMP:-true}"
+    _ADMIN_PRIVATE_IPC="${PRIVATE_IPC:-true}"
+    _ADMIN_FILTER_PASSWD="${FILTER_PASSWD:-true}"
 }
 
 # ── Phase 1: Source admin config (trusted — admin-owned, root-protected) ──
@@ -705,6 +734,29 @@ if [[ -n "$_SANDBOX_BACKEND_OVERRIDE" ]]; then
     SANDBOX_BACKEND="$_SANDBOX_BACKEND_OVERRIDE"
 fi
 unset _SANDBOX_BACKEND_OVERRIDE
+
+# Restore env overrides for security booleans (env takes precedence over
+# config, but admin enforcement still wins — checked below).
+for _bvar in PRIVATE_TMP PRIVATE_IPC FILTER_PASSWD; do
+    _override_var="_${_bvar}_OVERRIDE"
+    if [[ -n "${!_override_var}" ]]; then
+        eval "${_bvar}=\"${!_override_var}\""
+    fi
+    unset "$_override_var"
+done
+unset _bvar _override_var
+# Re-enforce admin policy on the env-overridden values: env can loosen
+# user config but cannot weaken admin-set security booleans.
+if [[ -n "$_ADMIN_CONF" ]]; then
+    for _bvar in PRIVATE_TMP PRIVATE_IPC FILTER_PASSWD; do
+        eval "_admin_val=\"\${_ADMIN_${_bvar}:-}\""
+        if _is_true "$_admin_val" && ! _is_true "${!_bvar}"; then
+            echo "WARNING: env override ${_bvar}=false blocked by admin policy — restored to true." >&2
+            eval "${_bvar}=true"
+        fi
+    done
+    unset _bvar _admin_val
+fi
 
 # ── Validate config ──────────────────────────────────────────────
 

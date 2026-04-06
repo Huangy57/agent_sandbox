@@ -75,7 +75,6 @@ backend_prepare() {
         --seccomp.drop=io_uring_setup,io_uring_enter,io_uring_register,userfaultfd,kexec_load,kexec_file_load
         --nosound
         --no3d
-        --ipc-namespace
         --restrict-namespaces
         --allusers
         # --allusers: disable /etc/passwd filtering. Firejail removes UIDs
@@ -97,6 +96,13 @@ backend_prepare() {
     # multi-process frameworks need shared /tmp for inter-rank communication.
     if _is_true "${PRIVATE_TMP:-true}"; then
         FIREJAIL_ARGS+=(--private-tmp)
+    fi
+
+    # IPC namespace isolation: gives sandbox its own SysV IPC + /dev/shm.
+    # Disable via PRIVATE_IPC=false in sandbox.conf if you need cross-sandbox
+    # or host-to-sandbox shared memory.
+    if _is_true "${PRIVATE_IPC:-true}"; then
+        FIREJAIL_ARGS+=(--ipc-namespace)
     fi
 
     # PID namespace is enabled by default in firejail (no flag needed).
