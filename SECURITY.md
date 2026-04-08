@@ -13,6 +13,9 @@ A vulnerability is a flaw that allows an agent (or attacker) to bypass a protect
 - Bypassing seccomp filters to execute blocked syscalls
 - Escaping the chaperon proxy to submit unsandboxed Slurm jobs
 - Privilege escalation through the sandbox scripts themselves
+- User enumeration (e.g. extracting usernames, home paths, or org structure from `/etc/passwd`, LDAP, or `finger`)
+- Host process table extraction (reading `/proc` to discover or inspect other users' processes)
+- Slurm queue information disclosure (extracting job names, resource usage, or submission details of other users)
 
 The following are **not** in scope (they are documented known limitations):
 
