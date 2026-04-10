@@ -62,6 +62,8 @@ For project-specific settings (different mounts for different directories), crea
 
 Slurm commands work inside the sandbox but are proxied through a secure chaperon process running outside. This is because munge authentication is intentionally blocked inside the sandbox.
 
+**From the agent's perspective, Slurm looks unperturbed.** Running `sbatch`, `srun`, `squeue`, `scancel`, `scontrol`, `sacct`, etc. behaves as if you were calling them from outside the sandbox — same exit codes, same stdout/stderr format, same workflow. Every call is heavily filtered by the chaperon under the hood (argument whitelisting, CWD validation, scope-filtered output, denied subcommands), but the surface presented to the agent is the unmodified Slurm CLI. Allowed commands pass through transparently; denied ones fail with an explanatory error.
+
 **Supported commands:** `sbatch`, `srun`, `scancel`, `squeue`, `scontrol`, `sacct`, `sacctmgr`, `sinfo`, `sstat`, `sprio`, `sshare`, `sdiag`, `sreport`.
 
 **Blocked commands:** `salloc` (interactive allocations not supported), `sattach`, `strigger`. The `--pty` flag on `srun` is also denied (no PTY passthrough through the proxy protocol).

@@ -36,6 +36,8 @@ Filesystem isolation on the login node is only half the story. The main point of
 
 This sandbox solves the Slurm problem with the **chaperon** — a zero-trust Slurm proxy that runs *outside* the sandbox and handles all job submission on behalf of the sandboxed process. Inside the sandbox, the munge authentication socket is blocked, all Slurm binaries are hidden or blacklisted, and Slurm configuration files are removed. The only way to submit jobs is through stub scripts that communicate with the chaperon via named pipes in a per-session temp directory (chmod 700, unpredictable response FIFO names). The chaperon validates arguments against a whitelist of safe sbatch flags, wraps every job in `sandbox-exec.sh` so compute-node jobs inherit the same sandbox, and rejects dangerous flags like `--uid`, `--get-user-env`, `--container`, and `--export`.
 
+Despite the heavy filtering, **the user-facing experience is indistinguishable from calling Slurm directly**: the sandboxed agent runs `sbatch`/`srun`/`squeue`/etc. exactly as it would outside the sandbox, sees the same exit codes, and reads stdout/stderr identical to what the real tools would print. All of the validation, scoping, and wrapping happens transparently in the chaperon.
+
 For the full architecture and security analysis, see [Chaperon: Secure Slurm Proxy](CHAPERON.md).
 
 ---
@@ -281,6 +283,8 @@ For Claude Code, the sandbox overlays `~/.claude/settings.json` to auto-allow to
 ## Slurm Integration (Chaperon)
 
 Inside the sandbox, all Slurm authentication and binaries are **blocked** — munge socket hidden, `/usr/bin/sbatch` etc. blacklisted, `/etc/slurm` removed. Job submission goes through the **chaperon**, a proxy process running outside the sandbox that communicates via named pipes in a per-session temp directory.
+
+**From the agent's perspective, Slurm looks unperturbed.** Running `sbatch`, `srun`, `squeue`, `scancel`, `scontrol`, `sacct`, and friends from inside the sandbox behaves as if you were calling them from outside the sandbox — the stubs are invoked on PATH exactly like the real binaries, return the same exit codes, and print stdout/stderr that matches what the real tools would produce. Under the hood every call is funneled through the chaperon and heavily filtered (argument whitelisting, CWD validation, scope-filtered output, denied subcommands), but the surface presented to the agent is the unmodified Slurm CLI. The filtering is intentionally transparent: allowed commands pass through untouched, denied ones fail with an explanatory error, and scoped output is rewritten so chaperon internals never leak.
 
 - **Stub sbatch:** Parses `--wrap` and script arguments, sends them over the `CHAPERON/1` protocol to the chaperon, prints the response. The agent calls `sbatch` as normal.
 - **Stub srun:** Proxied through the chaperon like sbatch. Two modes: **allocation mode** (login node) — validates flags, wraps the command in `sandbox-exec.sh` so compute-node processes are sandboxed, then calls real srun. **Step mode** (inside an sbatch job, `SLURM_JOB_ID` set) — validates flags against a step-only whitelist and execs real srun directly for MPI/multi-process step launching. `--pty` is denied (no PTY passthrough). The chaperon runs outside the sandbox and has munge access — munge is never exposed inside the sandbox.

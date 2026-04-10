@@ -8,6 +8,10 @@ The previous Slurm isolation model exposed the munge authentication socket (`/ru
 
 The chaperon replaces this with a **zero-trust architecture**: all Slurm authentication assets are blocked inside the sandbox, and a proxy process running *outside* the sandbox validates, wraps, and submits jobs on behalf of the sandboxed process.
 
+### User-Facing Experience
+
+Although every Slurm call from inside the sandbox is heavily filtered by the chaperon (argument whitelisting, CWD validation, scope-filtered output, denied subcommands, comment-tag injection and stripping), **interacting with Slurm through any utility from within the sandbox is indistinguishable from interacting with it from outside the sandbox**. The stubs shadow the real binaries on PATH, the exit codes match, and stdout/stderr are passed through verbatim (with only chaperon-internal metadata stripped). An agent running `sbatch`, `srun`, `squeue`, `scancel`, `scontrol show job`, `sacct`, `sinfo`, etc. sees output that looks like an unmodified Slurm CLI. The filtering is transparent in the allowed case, and explicit in the denied case: rejected flags and blocked subcommands fail with a clear error message instead of a silent rewrite.
+
 ## Architecture
 
 ```
