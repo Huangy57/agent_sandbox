@@ -263,7 +263,7 @@ cmd_start() {
         tls_args=(--certfile "$JUPYTER_CERTFILE" --keyfile "$JUPYTER_KEYFILE")
     fi
 
-    nohup uvx --python 3.12 --from jupyterlab \
+    uvx --python 3.12 --from jupyterlab \
         --with jupyterlmod \
         --with jupyterlab_notify \
         --with jupyterlab_execute_time \
