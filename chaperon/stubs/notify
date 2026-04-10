@@ -1,0 +1,13 @@
+#!/bin/bash --
+# chaperon/stubs/notify — Relay a notification to the outer tmux
+#
+# Sends a notification message to the chaperon, which displays it
+# in the outer tmux session (if available).
+
+set -euo pipefail
+
+_STUB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$_STUB_DIR/_stub_lib.sh"
+
+chaperon_call notify "$@"
+exit $?

@@ -9,5 +9,28 @@
       "Grep",
       "NotebookEdit"
     ]
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sandbox-notify 'Needs attention'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sandbox-notify 'Turn complete'"
+          }
+        ]
+      }
+    ]
   }
 }

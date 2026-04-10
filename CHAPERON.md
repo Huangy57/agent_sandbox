@@ -59,12 +59,14 @@ sandbox-exec.sh
 | **handlers/sacctmgr.sh** | Read-only cluster/QOS/TRES queries; blocks user enumeration |
 | **handlers/sinfo.sh, sstat.sh, sprio.sh, sshare.sh, sdiag.sh** | Read-only or user-scoped passthrough |
 | **handlers/sreport.sh, blocked.sh** | Blocked (user enumeration risk / unsupported commands) |
+| **handlers/notify.sh** | Non-Slurm: rings the bell on the outer terminal (marks the tmux tab) |
 
 **Untrusted side** (runs inside the sandbox, no Slurm credentials):
 
 | Component | Role |
 |---|---|
 | **stubs/{sbatch,srun,scancel,...}** | PATH-shadow the real Slurm binaries; serialize the user's command into a FIFO request and relay the response |
+| **stubs/notify** | Non-Slurm stub: sends a notification request to the chaperon |
 | **stubs/_stub_lib.sh** | Shared stub helpers: FIFO communication, request framing, response parsing |
 
 **Shared:**
@@ -94,12 +96,14 @@ chaperon/
 │   ├── sshare.sh            # User-scoped fairshare data
 │   ├── sdiag.sh             # Read-only scheduler diagnostics
 │   ├── sreport.sh           # Blocked (user enumeration risk)
-│   └── blocked.sh           # Generic "command blocked" response
+│   ├── blocked.sh           # Generic "command blocked" response
+│   └── notify.sh            # Non-Slurm: relay notification to outer tmux
 └── stubs/                   # PATH-shadowing stubs (all talk to chaperon)
     ├── _stub_lib.sh          # Stub→chaperon communication library
     ├── sbatch, srun, scancel, squeue, scontrol
     ├── sacct, sacctmgr, sinfo, sstat, sprio, sshare, sdiag, sreport
-    └── salloc, sattach, sbcast, scrontab, scrun, strigger  # blocked
+    ├── salloc, sattach, sbcast, scrontab, scrun, strigger  # blocked
+    └── notify               # Non-Slurm: notification relay
 ```
 
 ## Protocol: `CHAPERON/1`

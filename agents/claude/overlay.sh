@@ -57,12 +57,32 @@ except (ValueError, IOError):
     user = {}
 with open(sys.argv[2]) as f:
     sandbox = json.load(f)
+# Merge permissions.allow
 user.setdefault('permissions', {})
 existing = user['permissions'].get('allow', [])
 for rule in sandbox.get('permissions', {}).get('allow', []):
     if rule not in existing:
         existing.append(rule)
 user['permissions']['allow'] = existing
+# Merge hooks: for each event type, append sandbox hooks to user hooks
+# (skip duplicates by comparing the command string).
+sandbox_hooks = sandbox.get('hooks', {})
+if sandbox_hooks:
+    user.setdefault('hooks', {})
+    for event, sandbox_groups in sandbox_hooks.items():
+        user_groups = user['hooks'].get(event, [])
+        # Collect existing command strings to avoid duplicates
+        existing_cmds = set()
+        for g in user_groups:
+            for h in g.get('hooks', []):
+                if h.get('type') == 'command':
+                    existing_cmds.add(h.get('command', ''))
+        for g in sandbox_groups:
+            new_hooks = [h for h in g.get('hooks', [])
+                         if h.get('command', '') not in existing_cmds]
+            if new_hooks:
+                user_groups.append({**g, 'hooks': new_hooks})
+        user['hooks'][event] = user_groups
 json.dump(user, sys.stdout, indent=2)
 " "$user_settings" "$sandbox_settings" > "$config_dir/settings.json.tmp.$$"
         if ! mv -f "$config_dir/settings.json.tmp.$$" "$config_dir/settings.json" 2>/dev/null; then

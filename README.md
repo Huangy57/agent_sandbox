@@ -269,6 +269,7 @@ For Claude Code, the sandbox overlays `~/.claude/settings.json` to auto-allow to
 | **Slurm (chaperon)** | Munge + binaries + config blocked; chaperon proxy | Munge + binaries + config blocked; chaperon proxy | Munge not granted; chaperon proxy |
 | **Sandbox self-protection** | Read-only mount | Read-only mount | Not protected |
 | **tmux** | Outer blocked, nested works | Outer blocked, nested works | Outer blocked, nested works |
+| **Notifications** | `sandbox-notify` → inner bell + display-message; chaperon → outer bell (tab marking) | Same | Same |
 
 **Network** is not isolated on any backend — Claude Code requires network access to communicate with the Anthropic API, and many HPC tools (Slurm, LDAP/NSS, NFS) depend on network connectivity. See [Admin Hardening](ADMIN_HARDENING.md) for network restriction options.
 
@@ -339,6 +340,15 @@ lab kernel exec -n analysis.ipynb "df = pd.read_csv('data.csv')"
 ```
 
 On multi-user machines, pick a unique port to avoid collisions: `PORT=9012 lab start`. Variables, loaded dataframes, and model state persist between turns — load once, iterate cheaply. Both the kernel and the agent share the same sandboxed filesystem view, so the isolation guarantees hold. Run `lab help` for the full command list.
+
+### Notifications
+
+The sandbox ships `sandbox-notify` (in `bin/`, on PATH) which alerts the user via tmux when an agent needs attention or finishes a turn. It does two things:
+
+1. **Inner tmux:** rings the bell (marks the window/tab) and shows a `display-message` with the notification text. The message is sanitized (`#` → `##`) to prevent tmux format-sequence injection.
+2. **Outer tmux:** sends a `notify` request to the chaperon, which rings the bell on the outer terminal by writing `\a` to stderr. If the outer terminal is inside tmux with `monitor-bell` enabled (the default in many configs), the sandbox's window/tab is marked in the status bar until the user views it. No message content is passed to the outer tmux — the bell is content-free, so there is zero injection risk.
+
+For Claude Code, hooks are auto-configured via the settings.json overlay: the `Notification` event (agent needs attention) and `Stop` event (agent finished a turn) both trigger `sandbox-notify`, so the user sees tmux tab alerts without any manual setup. Other agents can call `sandbox-notify "message"` directly.
 
 ---
 
