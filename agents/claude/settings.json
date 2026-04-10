@@ -21,16 +21,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sandbox-notify 'Turn complete'"
-          }
-        ]
-      }
     ]
   }
 }

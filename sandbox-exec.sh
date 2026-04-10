@@ -186,7 +186,7 @@ if [[ -n "$_CHAPERON_DIR" ]]; then
 
     "$SCRIPT_DIR/chaperon/chaperon.sh" \
         "$_CHAPERON_DIR" "$PROJECT_DIR" "$SCRIPT_DIR/sandbox-exec.sh" \
-        >/dev/null 2>/dev/null &
+        4>&2 >/dev/null 2>/dev/null &
     _CHAPERON_PID=$!
 fi
 

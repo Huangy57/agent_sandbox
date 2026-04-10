@@ -18,13 +18,14 @@ handle_notify() {
     local project_dir="$1"
     local sandbox_exec="$2"
 
-    # Ring the bell on the outer terminal. The chaperon's stderr is
-    # connected to the launching shell's terminal. If the user launched
-    # the sandbox from inside tmux and monitor-bell is on, this marks
-    # the window/tab in the status bar — persistent until viewed.
-    # Also works without tmux (terminal bell / desktop notification,
-    # depending on the terminal emulator).
-    printf '\a' >&2
+    # Ring the bell on the outer terminal.  FD 4 is the chaperon's
+    # original stderr (duped by sandbox-exec.sh before redirecting
+    # stdout/stderr to /dev/null).  It points to the launching shell's
+    # terminal.  If the user launched the sandbox from inside tmux and
+    # monitor-bell is on, this marks the window/tab in the status bar —
+    # persistent until viewed.  Also works without tmux (terminal bell /
+    # desktop notification, depending on the terminal emulator).
+    printf '\a' >&4
 
     return 0
 }
