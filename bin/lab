@@ -263,7 +263,7 @@ cmd_start() {
         tls_args=(--certfile "$JUPYTER_CERTFILE" --keyfile "$JUPYTER_KEYFILE")
     fi
 
-    nohup uvx --from jupyterlab \
+    nohup uvx --python 3.12 --from jupyterlab \
         --with jupyterlmod \
         --with jupyterlab_notify \
         --with jupyterlab_execute_time \
@@ -308,7 +308,7 @@ cmd_status() {
 cmd_password() {
     require_uv
     mkdir -p "$JUPYTER_CONFIG_DIR"
-    exec uvx --from jupyterlab jupyter-lab password "$@"
+    exec uvx --python 3.12 --from jupyterlab jupyter-lab password "$@"
 }
 
 cmd_serve() {
@@ -332,7 +332,7 @@ cmd_serve() {
         tls_args=(--certfile "$JUPYTER_CERTFILE" --keyfile "$JUPYTER_KEYFILE")
     fi
 
-    exec uvx --from jupyterlab \
+    exec uvx --python 3.12 --from jupyterlab \
         --with jupyterlmod \
         --with jupyterlab_notify \
         --with jupyterlab_execute_time \
