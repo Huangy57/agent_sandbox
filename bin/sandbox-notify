@@ -15,9 +15,10 @@
 msg="${*:-Agent notification}"
 
 # 1. Inner tmux: ring the bell to mark the window/tab in the status bar.
-#    This is more useful than display-message because tmux's monitor-bell
-#    highlights which specific window needs attention.
-printf '\a' 2>/dev/null
+#    Write to /dev/tty (the controlling terminal) rather than stdout,
+#    which is often redirected when called from agent hooks. Inside a
+#    tmux pane, /dev/tty points to the pty that tmux monitors for bells.
+printf '\a' > /dev/tty 2>/dev/null || true
 
 # 2. Outer tmux: relay via the chaperon (which runs outside the sandbox
 #    and rings the bell on the outer terminal to mark the tab).
