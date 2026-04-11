@@ -232,6 +232,9 @@ jobs:
 
       - name: Build and install from local source via Homebrew
         run: |
+          # brew tap-new commits to a git repo — needs an identity on CI.
+          git config --global user.name "CI" && git config --global user.email "ci@test"
+
           # Modern Homebrew requires formulae to live in a tap. Create a
           # local tap with a formula that points at a tarball of the checkout.
           TAR="/tmp/agent-sandbox-ci.tar.gz"
