@@ -232,16 +232,21 @@ jobs:
 
       - name: Build and install from local source via Homebrew
         run: |
-          # Create a local formula that points at the checkout instead of a
-          # remote tarball.  This tests the exact same Makefile integration
-          # that the real formula uses after a release is tagged.
-          cat > /tmp/agent-sandbox.rb <<'FORMULA'
+          # Modern Homebrew requires formulae to live in a tap. Create a
+          # local tap with a formula that points at a tarball of the checkout.
+          TAR="/tmp/agent-sandbox-ci.tar.gz"
+          tar czf "$TAR" --transform 's,^\./,agent_sandbox-ci/,' \
+              --exclude='.git' --exclude='slurm-*.out' .
+          SHA=$(shasum -a 256 "$TAR" | awk '{print $1}')
+
+          brew tap-new ci/local
+          cat > "$(brew --repository ci/local)/Formula/agent-sandbox.rb" <<EOF
           class AgentSandbox < Formula
             desc "Kernel-enforced filesystem isolation for AI coding agents on Linux"
             homepage "https://github.com/katosh/agent_sandbox"
-            url "file://SRCDIR", using: :nounzip
+            url "file://$TAR"
             version "0.0.0-ci"
-            sha256 "SKIP"
+            sha256 "$SHA"
             license "MIT"
             depends_on :linux
             def install
@@ -251,21 +256,8 @@ jobs:
               assert_match "agent-sandbox", shell_output("#{bin}/agent-sandbox --version")
             end
           end
-          FORMULA
-          # Point the formula at the checked-out source tree
-          # brew install --build-from-source needs a tarball, so we create one
-          SRCDIR="$(pwd)"
-          TAR="/tmp/agent-sandbox-ci.tar.gz"
-          tar czf "$TAR" --transform 's,^\./,agent_sandbox-ci/,' \
-              --exclude='.git' --exclude='slurm-*.out' .
-          SHA=$(shasum -a 256 "$TAR" | awk '{print $1}')
-          sed -i "s|file://SRCDIR|file://$TAR|" /tmp/agent-sandbox.rb
-          sed -i "s|SKIP|$SHA|" /tmp/agent-sandbox.rb
-          sed -i 's|, using: :nounzip||' /tmp/agent-sandbox.rb
-          echo "=== Formula ==="
-          cat /tmp/agent-sandbox.rb
-          echo ""
-          brew install --formula --build-from-source /tmp/agent-sandbox.rb
+          EOF
+          brew install --formula --build-from-source ci/local/agent-sandbox
 
       - name: Verify agent-sandbox on PATH
         run: |
