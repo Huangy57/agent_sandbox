@@ -1838,20 +1838,12 @@ else
         fi
     fi
 
-    # 6c-bis. Additional rejection flags (--export, --prolog, --container, --chdir)
-    # These are rejected by chaperon/handlers/_handler_lib.sh ~lines 194-221
+    # 6c-bis. Additional rejection flags (--prolog, --container, --chdir)
+    # These are rejected by chaperon/handlers/_handler_lib.sh
     # but were previously untested — the only way to know the deny list
     # is still wired up is to assert each one rejects.
-    if sandbox sbatch --export=ALL --wrap="echo pwned"; then
-        fail "sbatch --export=ALL should be rejected by chaperon"
-    else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
-            pass "Chaperon rejects --export=ALL flag"
-        else
-            fail "Chaperon did not clearly reject --export=ALL" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
-        fi
-    fi
-
+    # Note: --export is intentionally allowed — compute-node jobs run
+    # inside sandbox-exec.sh which filters env vars regardless.
     if sandbox sbatch --prolog=/tmp/foo.sh --wrap="echo pwned"; then
         fail "sbatch --prolog should be rejected by chaperon"
     else
@@ -1882,9 +1874,9 @@ else
         fi
     fi
 
-    # 6c-ter. #SBATCH --export=ALL directive in the script body should be
-    # stripped or the whole submission rejected (see _handler_lib.sh:292-293).
-    # Without this, env vars from the submitter would propagate to the job.
+    # 6c-ter. #SBATCH --export=ALL directive in script body is allowed.
+    # --export is safe because compute-node jobs run inside sandbox-exec.sh
+    # which filters env vars regardless of what --export passes through.
     _scriptfile=$(mktemp)
     _TEST_TEMP_FILES+=("$_scriptfile")
     cat > "$_scriptfile" <<'SCRIPT'
@@ -1894,21 +1886,12 @@ echo "job-ran"
 SCRIPT
     if sandbox sbatch "$_scriptfile"; then
         if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "Submitted batch job"; then
-            pass "sbatch accepts script with #SBATCH --export=ALL stripped from body"
-        elif echo "$OUTPUT $OUTPUT_ERR" | grep -qi "not allowed\|denied\|blocked"; then
-            pass "Chaperon rejects scripts containing #SBATCH --export=ALL"
+            pass "sbatch accepts script with #SBATCH --export=ALL"
         else
-            fail "Ambiguous result submitting script with #SBATCH --export=ALL" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
+            fail "sbatch script with #SBATCH --export=ALL: unexpected output" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
         fi
     else
-        # Non-zero exit is also acceptable IF chaperon clearly rejected.
-        # "unexpected positional argument" means the handler caught the
-        # script path — that's a valid rejection path.
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "not allowed\|denied\|blocked\|error\|unexpected"; then
-            pass "Chaperon rejects scripts containing #SBATCH --export=ALL"
-        else
-            fail "sbatch on script with #SBATCH --export=ALL failed without clear rejection" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
-        fi
+        fail "sbatch script with #SBATCH --export=ALL should be accepted" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
     fi
     rm -f "$_scriptfile"
 

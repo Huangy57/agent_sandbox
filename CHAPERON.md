@@ -232,7 +232,6 @@ These flags are explicitly rejected because they could bypass sandboxing:
 | `--uid` / `--gid` | Must not impersonate other users |
 | `--get-user-env` | Can leak host environment variables |
 | `--propagate` | Can propagate unsafe resource limits |
-| `--export` | Could inject env vars to bypass sandbox detection |
 | `--prolog` / `--epilog` | Run arbitrary scripts outside sandbox control |
 | `--task-prolog` / `--task-epilog` | Same as above |
 | `--burst-buffer-file` / `--bbf` | Arbitrary file access |
@@ -262,7 +261,6 @@ The srun handler (`handlers/srun.sh`) operates in two modes:
 | `--pty` | No PTY passthrough via the chaperon protocol |
 | `--jobid` / `-j` | Cannot attach to arbitrary allocations |
 | `--uid` / `--gid` | Must not impersonate other users |
-| `--export` | Could inject env vars to bypass sandbox detection |
 | `--chdir` / `-D` | CWD comes from protocol and is validated |
 | `--get-user-env` | Can leak host environment variables |
 | `--propagate` | Can propagate unsafe resource limits |

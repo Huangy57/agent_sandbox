@@ -37,7 +37,8 @@ _sandbox_deny() {
 #   --uid / --gid — must not impersonate other users
 #   --get-user-env — can leak host environment
 #   --propagate   — can propagate unsafe rlimits
-#   --export      — could inject env vars to bypass sandbox
+#   (--export is allowed: compute-node jobs run inside sandbox-exec.sh
+#   which filters env vars regardless of what --export passes)
 #   --prolog / --epilog / --task-prolog / --task-epilog — run arbitrary scripts
 #   --burst-buffer-file / --bbf — arbitrary file access
 #   --bcast       — copy binary to nodes (bypass wrapping)
@@ -69,6 +70,7 @@ _SBATCH_ALLOWED_FLAGS=" \
   --cpu-freq \
   --deadline \
   --exclusive \
+  --export \
   --gres \
   --gpus-per-node \
   --gpus-per-task \
@@ -123,6 +125,7 @@ _SBATCH_VALUE_FLAGS=" \
   --constraint \
   --cpu-freq \
   --deadline \
+  --export \
   --gres \
   --gpus-per-node \
   --gpus-per-task \
@@ -189,10 +192,6 @@ validate_sbatch_args() {
                 ;;
             --propagate|--propagate=*)
                 _sandbox_deny "sbatch '--propagate' is not allowed — resource limit propagation is restricted for security."
-                return 1
-                ;;
-            --export|--export=*)
-                _sandbox_deny "sbatch '--export' is not allowed — environment variable injection could bypass sandbox restrictions."
                 return 1
                 ;;
             --prolog|--prolog=*|--epilog|--epilog=*|--task-prolog|--task-prolog=*|--task-epilog|--task-epilog=*)
@@ -290,7 +289,7 @@ create_wrapped_script() {
 
     # Filter #SBATCH directives: keep safe ones, strip dangerous ones.
     # This prevents bypassing the flag whitelist (e.g. #SBATCH --uid=0,
-    # #SBATCH --export=ALL, #SBATCH --prolog=/evil.sh) while preserving
+    # #SBATCH --prolog=/evil.sh) while preserving
     # legitimate resource directives (--mem, --partition, --time, etc.).
     local safe_directives=""
     local stripped_count=0

@@ -194,10 +194,6 @@ handle_srun() {
                 _sandbox_deny "srun '$arg' is not allowed — jobs must run as your own user."
                 return 1
                 ;;
-            --export|--export=*)
-                _sandbox_deny "srun '$arg' is not allowed — environment variable injection could bypass sandbox restrictions."
-                return 1
-                ;;
             --chdir|--chdir=*|-D)
                 _sandbox_deny "srun '$arg' is not allowed — the working directory is set automatically."
                 return 1

@@ -267,7 +267,7 @@ The chaperon is a zero-trust Slurm proxy that sits between the sandboxed agent a
 
 **Key security properties:**
 - Real Slurm binaries are blocked inside the sandbox (bind-mounted to `/dev/null` on bwrap, blacklisted on firejail). Munge socket is blocked on bwrap/firejail. **Landlock: neither Slurm binaries nor munge socket are blocked** — chaperon is fully bypassable (see [Admin Hardening](ADMIN_HARDENING.md) §1)
-- Dangerous flags (`--uid`, `--export`, `--prolog`, `--bcast`, `--container`) are rejected
+- Dangerous flags (`--uid`, `--prolog`, `--bcast`, `--container`, `--get-user-env`) are rejected
 - Job wrapping: sbatch scripts are inlined via heredoc into a wrapper that calls `sandbox-exec.sh` on the compute node — no temp files on NFS
 - Job scoping via `--comment` tags: `squeue`/`scancel` only see jobs submitted by this sandbox session/project (configurable via `SLURM_SCOPE`)
 - Scope-widening flags (`squeue --me`, `scancel --all`, `scancel -u <user>`) are silently mapped to "all jobs in your scope" — transparent to the user
