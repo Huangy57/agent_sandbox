@@ -111,6 +111,10 @@ backend_prepare() {
     # or host-to-sandbox shared memory.
     if _is_true "${PRIVATE_IPC:-true}"; then
         FIREJAIL_ARGS+=(--ipc-namespace)
+        # --ipc-namespace gives a new SysV IPC namespace but does NOT
+        # mount a private /dev/shm. Without this, POSIX shared memory
+        # writes leak to the host (matching bwrap's --tmpfs /dev/shm).
+        FIREJAIL_ARGS+=(--tmpfs=/dev/shm)
     fi
 
     # PID namespace is enabled by default in firejail (no flag needed).
@@ -289,14 +293,16 @@ backend_prepare() {
         fi
     done
 
-    # Agent sandbox-config directories: whitelist so they are visible
-    # inside the sandbox regardless of HOME_WRITABLE, then mark
-    # read-only. The agent reads them via CLAUDE_CONFIG_DIR / CODEX_HOME
-    # / etc., so write access isn't needed here — overlay.sh does
-    # host-side merging before the sandbox starts.
+    # Agent sandbox-config directories: make visible and read-only.
+    # In restricted/tmpwrite mode, --whitelist is needed to punch through
+    # the tmpfs overlay. In read/write mode, HOME is already fully
+    # visible — using --whitelist would trigger firejail's tmpfs HOME
+    # and break the full-HOME intent. Just mark read-only there.
     for _agent_dir in "${_AGENT_SANDBOX_CONFIG_DIRS[@]:-}"; do
         if [[ -n "$_agent_dir" && -d "$_agent_dir" ]]; then
-            FIREJAIL_ARGS+=(--whitelist="$_agent_dir")
+            if [[ "${HOME_ACCESS:-restricted}" == "restricted" || "${HOME_ACCESS}" == "tmpwrite" ]]; then
+                FIREJAIL_ARGS+=(--whitelist="$_agent_dir")
+            fi
             FIREJAIL_ARGS+=(--read-only="$_agent_dir")
         fi
     done
