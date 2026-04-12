@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.2.0] - 2026-04-11
+## [0.2.0] - 2026-04-12
 
 All sandbox permissions (readable/writable paths, blocked files, allowed
 env vars) now live in the sandbox configuration layer — `sandbox.conf`
@@ -25,6 +25,9 @@ API keys are allowed by default so agents work out of the box.
   `ALLOWED_ENV_VARS`, `EXTRA_BLOCKED_PATHS`, `HOME_READONLY`,
   `HOME_WRITABLE`, `EXTRA_WRITABLE_PATHS`, `READONLY_MOUNTS`,
   `DENIED_WRITABLE_PATHS`.
+- **Firejail /var/tmp write leak:** firejail's `--private-tmp` only
+  isolates `/tmp`, leaving `/var/tmp` writable on the host. Added
+  `--blacklist=/var/tmp` to match bwrap/landlock isolation.
 
 ### Changed (breaking)
 
@@ -46,6 +49,12 @@ API keys are allowed by default so agents work out of the box.
 - Agent instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`) are listed
   explicitly in `BLOCKED_FILES`.
+- **sandbox-notify rewrite:** removed the chaperon notify relay
+  (`chaperon/handlers/notify.sh`, `chaperon/stubs/notify`, FD-4
+  plumbing). Notification now uses two native paths: direct `/dev/tty`
+  bell for interactive shells, and `tmux new-window -d` IPC fallback
+  for subprocesses without a controlling terminal. Relies on tmux's
+  built-in `bell-action` propagation to the outer session.
 
 ### Added
 
@@ -58,12 +67,42 @@ API keys are allowed by default so agents work out of the box.
 - `_check_agent_requirements`, `_env_var_reachable`, `_path_is_writable`,
   `_path_is_readable`, `_ensure_writable_home_dirs` helpers.
 
+### Fixed
+
+- Built-in defaults in `sandbox-lib.sh` aligned with `sandbox.conf`:
+  `ALLOWED_ENV_VARS`, `HOME_WRITABLE`, `HOME_READONLY`, and
+  `BLOCKED_FILES` now carry the same entries as the shipped config so
+  the sandbox works correctly even without a user config file.
+- Firejail and landlock agent-config visibility: merged agent config
+  dirs (e.g. `~/.claude/sandbox-config`) are now whitelisted/granted
+  in both backends so `CLAUDE_CONFIG_DIR` is reachable inside the
+  sandbox.
+- `sandbox-notify` no longer errors when run without a controlling
+  terminal (e.g. from agent hooks that redirect stdout).
+
+### CI
+
+- Full test suite on all backends (was `--quick`); added live-Slurm
+  job using `koesterlab/setup-slurm-action` with MySQL backend.
+- Composite action (`setup-sandbox-host`) for bubblewrap install and
+  AppArmor user-namespace sysctl on Ubuntu runners.
+- Smoke job (syntax check + shellcheck) gates all backend test jobs.
+- Outer tmux session started so socket-isolation tests run.
+- JUnit XML output for structured CI reporting.
+
 ### Tests
 
-- New section-4 assertions: universal overlay preparation, GOOGLE_API_KEY
-  passthrough by default, per-agent credential warning, per-agent and
-  `all` suppression, permission-mutation guardrail aborts on a malicious
-  overlay, auto-mkdir of `HOME_WRITABLE` entries.
+- Test suite expanded from ~2400 to ~3600 lines (+50% coverage).
+- CVE-grade escape probes: runc-style `/proc/1/root` traversal, cgroup
+  `release_agent` write, NoNewPrivs enforcement.
+- Chaperon: PDEATHSIG liveness, `SLURM_SCOPE=session`, `LD_PRELOAD`
+  probe, sbatch flag rejection gaps, job-wrapping verification.
+- Section 7 (self-protection) expanded to all tamperable sandbox
+  surfaces.
+- `ALLOWED_PROJECT_PARENTS` rejection, extra credential dirs,
+  `AGENT_AUTH_MARKERS` validation.
+- `sandbox_must_run` helper for deterministic setup; unified fixture
+  cleanup on exit.
 
 ## [0.1.0] - 2026-04-11
 
