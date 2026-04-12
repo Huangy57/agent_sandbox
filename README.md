@@ -299,7 +299,7 @@ For Claude Code, the sandbox overlays `~/.claude/settings.json` to auto-allow to
 | **Slurm (chaperon)** | Munge + binaries + config blocked; chaperon proxy | Munge + binaries + config blocked; chaperon proxy | Munge not granted; chaperon proxy |
 | **Sandbox self-protection** | Read-only mount | Read-only mount | Not protected |
 | **tmux** | Outer blocked, nested works | Outer blocked, nested works | Outer blocked, nested works |
-| **Notifications** | `sandbox-notify` → inner bell + display-message; chaperon → outer bell (tab marking) | Same | Same |
+| **Notifications** | `sandbox-notify` emits one BEL; tmux's `bell-action any` propagates to both inner and outer status bars (`tmux new-window` IPC fallback when `/dev/tty` is unavailable) | Same | Same |
 
 **Network** is not isolated on any backend — Claude Code requires network access to communicate with the Anthropic API, and many HPC tools (Slurm, LDAP/NSS, NFS) depend on network connectivity. See [Admin Hardening](ADMIN_HARDENING.md) for network restriction options.
 
@@ -382,10 +382,12 @@ On multi-user machines, pick a unique port to avoid collisions: `PORT=9012 lab s
 
 ### Notifications
 
-The sandbox ships `sandbox-notify` (in `bin/`, on PATH) which alerts the user via tmux when an agent needs attention or finishes a turn. It does two things:
+The sandbox ships `sandbox-notify` (in `bin/`, on PATH) which alerts the user via tmux when an agent needs attention or finishes a turn. It emits a single terminal BEL and lets tmux's own propagation flag both the inner and outer status bars — `monitor-bell` on + `bell-action any` (tmux defaults) means a BEL from an inner pane is forwarded to the client's pty automatically, so one emission marks both nested tmux tabs.
 
-1. **Inner tmux:** rings the bell (marks the window/tab) and shows a `display-message` with the notification text. The message is sanitized (`#` → `##`) to prevent tmux format-sequence injection.
-2. **Outer tmux:** sends a `notify` request to the chaperon, which rings the bell on the outer terminal by writing `\a` to stderr. If the outer terminal is inside tmux with `monitor-bell` enabled (the default in many configs), the sandbox's window/tab is marked in the status bar until the user views it. No message content is passed to the outer tmux — the bell is content-free, so there is zero injection risk.
+Emission is best-effort and tries two paths:
+
+1. **`/dev/tty`** — for interactive shells and any process that inherited a controlling terminal.
+2. **`tmux new-window -d -n '•bell' 'printf "\a"'`** — IPC fallback for agent subprocesses (Claude Code's Bash tool, for example) that have no controlling terminal. The ephemeral window's BEL rides the same tmux bell-action chain. No chaperon relay needed.
 
 For Claude Code, hooks are auto-configured via the settings.json overlay: the `Notification` event (agent needs attention) and `Stop` event (agent finished a turn) both trigger `sandbox-notify`, so the user sees tmux tab alerts without any manual setup. Other agents can call `sandbox-notify "message"` directly.
 

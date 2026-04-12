@@ -70,10 +70,6 @@ READ_FD=3
 
 # ── FD conventions ──────────────────────────────────────────────
 # FD 3 — request FIFO (read end, opened above)
-# FD 4 — outer terminal (stderr duped by sandbox-exec.sh before
-#         redirecting chaperon's stdout/stderr to /dev/null).
-#         Handlers that need direct terminal access (e.g., notify
-#         ringing the bell) write to this FD.
 
 # ── Handler dispatch ─────────────────────────────────────────────
 
