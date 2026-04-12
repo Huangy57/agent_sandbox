@@ -479,6 +479,45 @@ if sandbox bash -c 'echo $SANDBOX_BACKEND'; then
     fi
 fi
 
+# ── ALLOWED_PROJECT_PARENTS enforcement ──────────────────────────
+# sandbox-exec.sh must reject --project-dir paths that aren't under
+# any entry in ALLOWED_PROJECT_PARENTS (sandbox.conf:92-97). Build a
+# dir under /var/tmp (writable on virtually every host, never in the
+# default allow-list) and verify rejection with a clear error.
+#
+# Fallback: if /var/tmp isn't usable (rare — some hardened setups
+# mount it noexec or lock it down), fall back to /dev/shm. Both are
+# writable-by-user on essentially every Linux but outside the default
+# HOME / /fh/* prefixes.
+_reject_dir=$(mktemp -d "/var/tmp/sandbox-rejtest-XXXXXX" 2>/dev/null) || \
+    _reject_dir=$(mktemp -d "/dev/shm/sandbox-rejtest-XXXXXX" 2>/dev/null)
+if [[ -n "$_reject_dir" && -d "$_reject_dir" ]]; then
+    _TEST_TEMP_DIRS+=("$_reject_dir")
+    # Identify which parent we ended up under, so we can sanity-check
+    # the effective config doesn't accidentally list it.
+    _reject_parent="${_reject_dir%/*}"
+    _raw=$("$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+        --project-dir "$_reject_dir" -- true 2>&1)
+    _rc=$?
+    if [[ $_rc -ne 0 ]] && echo "$_raw" | grep -qiE "not.*allowed|not under any ALLOWED_PROJECT_PARENTS|must be under"; then
+        pass "ALLOWED_PROJECT_PARENTS rejects --project-dir outside listed prefixes"
+    else
+        # False-positive guard: if an admin or user config happens to
+        # list the parent we chose, the sandbox would legitimately
+        # accept it. Detect that and skip rather than report a bogus
+        # failure.
+        if grep -qE "\"${_reject_parent}\"" \
+            /app/lib/agent-sandbox/sandbox.conf \
+            "${HOME}/.config/agent-sandbox/sandbox.conf" 2>/dev/null; then
+            skip "ALLOWED_PROJECT_PARENTS test: ${_reject_parent} is in a config layer — can't test negative"
+        else
+            fail "ALLOWED_PROJECT_PARENTS did not reject project-dir under ${_reject_parent}" "rc=$_rc out=$_raw"
+        fi
+    fi
+else
+    skip "ALLOWED_PROJECT_PARENTS test: could not create a temp dir under /var/tmp or /dev/shm"
+fi
+
 echo ""
 
 # ── 2. Filesystem isolation ──────────────────────────────────────
@@ -523,6 +562,82 @@ test_blocked_dir() {
 test_blocked_dir "$HOME/.ssh" "~/.ssh"
 test_blocked_dir "$HOME/.aws" "~/.aws"
 test_blocked_dir "$HOME/.gnupg" "~/.gnupg"
+
+# ── Extra credential paths beyond the canonical .ssh/.aws/.gnupg ─
+# sandbox-lib.sh's _HOME_ALWAYS_BLOCKED currently lists only those
+# three, but README/SECURITY.md tacitly promise "credential hiding".
+# Modern cloud CLIs store tokens elsewhere; test whether those paths
+# are hidden too. Skip when the path is absent on the host.
+#
+# Landlock backend can't hide present-on-host paths via tmpfs, so we
+# only exercise mount-namespace backends here (same pattern as the
+# history-file tests below).
+if has_mount_ns; then
+    # .netrc is universally recognised as a credential file; we treat
+    # it as a hard requirement. The others are aspirational — warn
+    # (not fail) so the assertion flips to pass automatically when
+    # _HOME_ALWAYS_BLOCKED is later expanded.
+    _extra_creds_strict=(
+        ".netrc"                # curl/wget HTTP basic auth (FILE)
+    )
+    _extra_creds_soft=(
+        ".kube/config"          # kubectl (FILE)
+        ".docker/config.json"   # Docker Hub tokens (FILE)
+        ".config/gcloud"        # Google Cloud (DIR)
+        ".azure"                # Azure CLI (DIR)
+        ".config/op"            # 1Password CLI (DIR)
+        ".config/helm"          # Helm (DIR)
+        ".terraform.d"          # Terraform login (DIR)
+    )
+
+    _cred_present() {
+        # Present if it's a non-empty dir or an existing file.
+        local p="$1"
+        if [[ -d "$p" ]]; then
+            # Treat empty dirs as "not really there" to avoid noisy skips.
+            [[ -n "$(ls -A "$p" 2>/dev/null)" ]]
+        else
+            [[ -e "$p" ]]
+        fi
+    }
+
+    _cred_hidden_in_sandbox() {
+        # Returns 0 when the path is NOT visible inside the sandbox.
+        local p="$1"
+        if sandbox bash -c "test -e '$p' && echo VISIBLE || echo HIDDEN"; then
+            [[ "$OUTPUT" == "HIDDEN" ]]
+        else
+            # Couldn't invoke sandbox — treat as inconclusive (not hidden).
+            return 1
+        fi
+    }
+
+    for _rel in "${_extra_creds_strict[@]}"; do
+        _abs="$HOME/$_rel"
+        if _cred_present "$_abs"; then
+            if _cred_hidden_in_sandbox "$_abs"; then
+                pass "~/$_rel is hidden (credential file)"
+            else
+                fail "~/$_rel is visible (credential file must be hidden)" "$OUTPUT"
+            fi
+        else
+            skip "~/$_rel not present on host"
+        fi
+    done
+
+    for _rel in "${_extra_creds_soft[@]}"; do
+        _abs="$HOME/$_rel"
+        if _cred_present "$_abs"; then
+            if _cred_hidden_in_sandbox "$_abs"; then
+                pass "~/$_rel is hidden"
+            else
+                warn "~/$_rel is visible — docs promise credential hiding but _HOME_ALWAYS_BLOCKED doesn't cover it"
+            fi
+        else
+            skip "~/$_rel not present on host"
+        fi
+    done
+fi
 
 # Project dir writable
 TESTFILE="$PROJECT_DIR/.test-write-$$"
@@ -1475,7 +1590,7 @@ else
 fi
 
 # 5l. Blocked commands give clear error (salloc, strigger, etc.)
-if sandbox bash -c 'salloc 2>&1' 2>/dev/null; then
+if sandbox_must_run bash -c 'salloc 2>&1'; then
     # salloc might not exist on all systems — that's ok
     if echo "$OUTPUT" | grep -qi "not allowed\|not found"; then
         pass "salloc correctly blocked or not found"
@@ -1483,7 +1598,10 @@ if sandbox bash -c 'salloc 2>&1' 2>/dev/null; then
         fail "salloc should be blocked" "$OUTPUT"
     fi
 else
-    if echo "$OUTPUT" | grep -qi "not allowed\|not found\|error"; then
+    _rc=$?
+    if [[ "$_rc" -eq 125 ]]; then
+        : # sandbox_must_run already emitted a fail()
+    elif echo "$OUTPUT $OUTPUT_ERR" | grep -qi "not allowed\|not found\|error"; then
         pass "salloc correctly blocked by chaperon"
     else
         fail "salloc block error unexpected" "$OUTPUT"
@@ -1599,6 +1717,51 @@ fi
 # 5g. Landlock D-Bus/systemd-run escape — covered by §8 general systemd-run
 # escape test (which explicitly handles Landlock via is_landlock branches).
 
+# 5h. Chaperon lifecycle: should die when its parent (sandbox-exec.sh) dies.
+# README.md §332 claims PR_SET_PDEATHSIG + liveness polling reaps the
+# chaperon. Verify by starting a sandbox in the background, locating the
+# chaperon PID, killing the parent, and asserting the chaperon is gone.
+if command -v pgrep &>/dev/null; then
+    _chaperon_lifecycle_test() {
+        # Start sandbox in background doing a long sleep.
+        timeout 30 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+            --project-dir "$PROJECT_DIR" -- sleep 20 &>/dev/null &
+        local _parent_pid=$!
+        # Give chaperon time to spawn.
+        sleep 2
+        # Find the chaperon PID for this session.
+        local _chaperon_pid
+        _chaperon_pid=$(pgrep -f "chaperon/chaperon.sh" | head -1)
+        if [[ -z "$_chaperon_pid" ]]; then
+            skip "Chaperon lifecycle test: could not locate chaperon process"
+            kill "$_parent_pid" 2>/dev/null
+            wait "$_parent_pid" 2>/dev/null
+            return
+        fi
+        # Kill the sandbox-exec.sh parent (SIGTERM, not SIGKILL — give
+        # PR_SET_PDEATHSIG a chance to fire).
+        kill "$_parent_pid" 2>/dev/null
+        wait "$_parent_pid" 2>/dev/null
+        # Allow PR_SET_PDEATHSIG to deliver + chaperon cleanup loop to exit.
+        # Poll up to 5 seconds.
+        local _dead=false _i
+        for _i in 1 2 3 4 5; do
+            if ! kill -0 "$_chaperon_pid" 2>/dev/null; then _dead=true; break; fi
+            sleep 1
+        done
+        if $_dead; then
+            pass "Chaperon dies with its parent (PR_SET_PDEATHSIG)"
+        else
+            fail "Chaperon survived parent death (PID $_chaperon_pid still alive)"
+            kill "$_chaperon_pid" 2>/dev/null
+        fi
+    }
+    _chaperon_lifecycle_test
+    unset -f _chaperon_lifecycle_test
+else
+    skip "Chaperon lifecycle test: pgrep not available"
+fi
+
 echo ""
 
 # ── 6. Chaperon functional tests ─────────────────────────────────
@@ -1630,23 +1793,31 @@ else
     # 6c. Denied flags rejected
     # Rejection messages from the chaperon stubs go to stderr, which
     # the helper captures in $OUTPUT_ERR (not $OUTPUT).
-    if sandbox sbatch --uid=0 --wrap="echo pwned"; then
+    # Use sandbox_must_run: a sandbox boot failure would emit "not allowed"
+    # style text on stderr and falsely satisfy the rejection pattern.
+    if sandbox_must_run sbatch --uid=0 --wrap="echo pwned"; then
         fail "sbatch --uid=0 should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
-            pass "Chaperon rejects --uid flag"
-        else
-            fail "Chaperon did not clearly reject --uid" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
+        _rc=$?
+        if [[ "$_rc" -ne 125 ]]; then
+            if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
+                pass "Chaperon rejects --uid flag"
+            else
+                fail "Chaperon did not clearly reject --uid" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
+            fi
         fi
     fi
 
-    if sandbox sbatch --get-user-env --wrap="echo pwned"; then
+    if sandbox_must_run sbatch --get-user-env --wrap="echo pwned"; then
         fail "sbatch --get-user-env should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
-            pass "Chaperon rejects --get-user-env flag"
-        else
-            fail "Chaperon did not clearly reject --get-user-env" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
+        _rc=$?
+        if [[ "$_rc" -ne 125 ]]; then
+            if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
+                pass "Chaperon rejects --get-user-env flag"
+            else
+                fail "Chaperon did not clearly reject --get-user-env" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
+            fi
         fi
     fi
 
@@ -1818,6 +1989,54 @@ SCRIPT
     else
         skip "scancel not found on host — skipping scancel tests"
     fi
+fi
+
+# 6f. SLURM_SCOPE=session variant (best-effort).
+# SLURM_SCOPE has 4 documented values: project (default), session, user,
+# none. Only the default is covered above. This probe submits a job with
+# SCOPE=session and verifies that a second sandbox invocation (which has
+# a different session token) cannot cancel it. Testing SCOPE=user/=none
+# would require running as a different user and is deliberately skipped.
+# Any step that doesn't complete cleanly falls back to warn, not fail —
+# this is best-effort observability, not a security guarantee check.
+if command -v sbatch &>/dev/null && command -v scancel &>/dev/null; then
+    _scope_conf="$HOME/.config/agent-sandbox/conf.d/test-scope-$$.conf"
+    mkdir -p "$HOME/.config/agent-sandbox/conf.d"
+    _TEST_TEMP_FILES+=("$_scope_conf")
+    echo 'SLURM_SCOPE="session"' > "$_scope_conf"
+    # Submit a job from sandbox A.
+    _jid_a=""
+    if sandbox sbatch --wrap='sleep 30'; then
+        _jid_a=$(echo "$OUTPUT" | grep -oE "[0-9]+" | tail -1)
+    fi
+    if [[ -n "$_jid_a" ]]; then
+        # Try to cancel it from sandbox B (a different sandbox invocation
+        # → different session token). With SCOPE=session this should be
+        # rejected as out-of-scope.
+        if sandbox scancel "$_jid_a"; then
+            _cancel_b_rc=0
+        else
+            _cancel_b_rc=$?
+        fi
+        _cancel_b="$OUTPUT $OUTPUT_ERR"
+        if echo "$_cancel_b" | grep -qi "not submitted by this\|out of scope\|not found\|no sandbox"; then
+            pass "SLURM_SCOPE=session: other sandbox session cannot cancel"
+        elif [[ $_cancel_b_rc -ne 0 ]]; then
+            pass "SLURM_SCOPE=session: other sandbox session rejected (rc=$_cancel_b_rc)"
+        else
+            warn "SLURM_SCOPE=session: cross-session scancel was not clearly blocked"
+        fi
+        # Cleanup: cancel from outside the sandbox to avoid an orphan job.
+        scancel "$_jid_a" 2>/dev/null || true
+    else
+        warn "SLURM_SCOPE=session: could not submit probe job (best-effort test)"
+    fi
+    rm -f "$_scope_conf"
+    # SCOPE=user/=none widen scope and require submitting a job as a
+    # different user to verify. Multi-user setup is out of scope here.
+    skip "SLURM_SCOPE=user/=none: require multi-user setup (not tested)"
+else
+    skip "SLURM_SCOPE=session test: sbatch/scancel not on host"
 fi
 
 echo ""
@@ -2308,6 +2527,44 @@ else
     pass "K01: TIOCSTI test command failed (sandbox blocked)"
 fi
 
+# LD_PRELOAD probe: compile a tiny .so inside the project dir, set
+# LD_PRELOAD to it, and run a trivial command. Whether this SHOULD be
+# blocked is policy — currently the sandbox does NOT block LD_PRELOAD
+# from the project dir, so this test documents observed reality via
+# warn/pass. A future tightening (e.g. seccomp block on open of
+# project-dir .so files, or scrubbing LD_PRELOAD at sandbox entry) will
+# auto-flip the warn to pass.
+_so_src=$(mktemp -p "$PROJECT_DIR" .ld_preload_probe_XXXXXX.c)
+_so_bin="${_so_src%.c}.so"
+_TEST_TEMP_FILES+=("$_so_src" "$_so_bin")
+cat > "$_so_src" <<'LDSRC_EOF'
+#include <stdio.h>
+__attribute__((constructor)) static void ctor(void) {
+    fputs("LD_PRELOAD_LOADED\n", stderr);
+}
+LDSRC_EOF
+
+if command -v gcc &>/dev/null || command -v cc &>/dev/null; then
+    _cc=$(command -v gcc || command -v cc)
+    if "$_cc" -shared -fPIC -o "$_so_bin" "$_so_src" 2>/dev/null; then
+        if sandbox bash -c "LD_PRELOAD='$_so_bin' true 2>&1"; then
+            _ld_out="$OUTPUT $OUTPUT_ERR"
+        else
+            _ld_out="$OUTPUT $OUTPUT_ERR"
+        fi
+        if echo "$_ld_out" | grep -q "LD_PRELOAD_LOADED"; then
+            warn "LD_PRELOAD: agent-controlled .so was loaded (not blocked — see SECURITY.md)"
+        else
+            pass "LD_PRELOAD from project dir was NOT loaded (blocked)"
+        fi
+    else
+        skip "LD_PRELOAD test: couldn't compile probe .so"
+    fi
+else
+    skip "LD_PRELOAD test: no C compiler on host"
+fi
+rm -f "$_so_src" "$_so_bin"
+
 echo ""
 
 # ── 9. Syscall & privilege restrictions ───────────────────────────
@@ -2392,7 +2649,24 @@ print('BLOCKED' if ctypes.get_errno() == 1 else 'ALLOWED')
         local _seccomp_py="$SCRIPT_DIR/backends/generate-seccomp.py"
         local _seccomp_bak="${_seccomp_py}.test-bak-$$"
         if [[ -f "$_seccomp_py" ]]; then
-            mv "$_seccomp_py" "$_seccomp_bak"
+            # Trap-guard the swap: a SIGINT mid-sandbox would otherwise strand
+            # the backup and silently break subsequent bwrap runs. We save the
+            # previous EXIT trap and restore it when done so the global
+            # _test_cleanup trap is preserved.
+            _seccomp_orig="$_seccomp_py"
+            _seccomp_bak_path="$_seccomp_bak"
+            _seccomp_prev_exit_trap=$(trap -p EXIT)
+            _seccomp_restore() {
+                if [[ -f "$_seccomp_bak_path" && ! -f "$_seccomp_orig" ]]; then
+                    mv "$_seccomp_bak_path" "$_seccomp_orig"
+                fi
+            }
+            # shellcheck disable=SC2064
+            trap '_seccomp_restore; eval "${_seccomp_prev_exit_trap:-true}"' EXIT
+            trap '_seccomp_restore; exit 130' INT
+            trap '_seccomp_restore; exit 143' TERM
+
+            mv "$_seccomp_orig" "$_seccomp_bak_path"
             if sandbox python3 -c "
 import ctypes, ctypes.util
 libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
@@ -2400,7 +2674,7 @@ ret = libc.syscall(ctypes.c_long(425), ctypes.c_uint32(1), ctypes.c_void_p(0))
 e = ctypes.get_errno()
 print(f'ERRNO={e}')
 " 2>&1; then
-                mv "$_seccomp_bak" "$_seccomp_py"
+                _seccomp_restore
                 local _no_filter_errno
                 _no_filter_errno=$(echo "$OUTPUT" | grep -oP 'ERRNO=\K[0-9]+' || echo "")
                 if [[ "$_no_filter_errno" != "1" ]]; then
@@ -2409,9 +2683,18 @@ print(f'ERRNO={e}')
                     fail "io_uring_setup returns EPERM even without seccomp filter — something else blocks it"
                 fi
             else
-                mv "$_seccomp_bak" "$_seccomp_py"
+                _seccomp_restore
                 skip "Could not run without-filter test"
             fi
+
+            # Restore previous signal disposition (reinstating the global EXIT trap)
+            trap - INT TERM
+            if [[ -n "$_seccomp_prev_exit_trap" ]]; then
+                eval "$_seccomp_prev_exit_trap"
+            else
+                trap - EXIT
+            fi
+            unset _seccomp_orig _seccomp_bak_path _seccomp_prev_exit_trap
         else
             skip "generate-seccomp.py not found"
         fi
@@ -2436,10 +2719,17 @@ fi
 # sudo -n -u root id would only succeed if setuid worked. With NNP, the
 # setuid bit should be ignored and sudo should either fail to escalate
 # or fail to start. We don't care WHICH — just that uid=0 is not reached.
+#
+# A naive "uid!=0 ⇒ pass" collapses "NNP is working" with "sudo can't run
+# at all" (no sudoers entry, PAM reject, missing TTY). Distinguish those:
+# if sudo rejects for policy reasons before even attempting the setuid
+# escalation, nothing about the sandbox was tested → skip.
 if command -v sudo &>/dev/null; then
     if sandbox bash -c 'sudo -n -u root id 2>&1 || true' 2>/dev/null; then
         if echo "$OUTPUT" | grep -qE "^uid=0\b"; then
             fail "N02: sudo inside sandbox escalated to uid=0 (NNP not enforced)" "$OUTPUT"
+        elif echo "$OUTPUT" | grep -qiE "may not run sudo|password is required|no tty present|PAM|a terminal is required|sudoers"; then
+            skip "N02: sudo unusable for unrelated reasons — NNP can't be tested without a usable setuid binary"
         else
             pass "N02: NoNewPrivs neuters setuid binary (sudo did not escalate)"
         fi
@@ -2455,6 +2745,17 @@ if is_firejail; then
             pass "All capabilities dropped"
         else
             fail "Capabilities not fully dropped: $OUTPUT"
+        fi
+    fi
+fi
+if is_bwrap; then
+    # bwrap drops all caps too (backends/bwrap.sh --cap-drop all). Mirror the
+    # firejail assertion so the bwrap backend is held to the same bar.
+    if sandbox bash -c 'grep "^CapEff:" /proc/self/status | awk "{print \$2}"'; then
+        if [[ "$OUTPUT" =~ ^0+$ ]]; then
+            pass "All capabilities dropped (bwrap)"
+        else
+            fail "Capabilities not fully dropped under bwrap: $OUTPUT"
         fi
     fi
 fi
@@ -2631,7 +2932,9 @@ else
 fi
 
 # pty allocation and tmux (requires BIND_DEV_PTS=true on kernels < 5.4)
-if sandbox bash -c 'python3 -c "import pty; pty.openpty(); print(\"pty-ok\")" 2>&1'; then
+if ! command -v python3 &>/dev/null; then
+    skip "pty allocation test — python3 not available on host"
+elif sandbox bash -c 'python3 -c "import pty; pty.openpty(); print(\"pty-ok\")" 2>&1'; then
     if [[ "$OUTPUT" == *"pty-ok"* ]]; then
         pass "pty allocation works inside sandbox"
     else
@@ -2702,7 +3005,11 @@ if sandbox bash -c '
 fi
 
 # ── R03: /proc/sysrq-trigger should not be writable (host-reboot vector) ──
-if sandbox bash -c '[[ -e /proc/sysrq-trigger ]] && echo "EXISTS" || echo "NOT_PRESENT"'; then
+# Must exist on the host for this test to be meaningful; otherwise "not
+# visible in sandbox" tells us nothing about what the sandbox does.
+if [[ ! -e /proc/sysrq-trigger ]]; then
+    skip "R03: /proc/sysrq-trigger absent on host — nothing to test"
+elif sandbox bash -c '[[ -e /proc/sysrq-trigger ]] && echo "EXISTS" || echo "NOT_PRESENT"'; then
     if [[ "$OUTPUT" == "EXISTS" ]]; then
         if sandbox bash -c 'echo s > /proc/sysrq-trigger 2>&1 && echo WROTE || echo BLOCKED'; then
             case "$OUTPUT" in
@@ -2912,7 +3219,7 @@ unset _TEST_CRED_VAR
 # matching the GITHUB_PAT pattern on GitHub Actions runners).
 export GITHUB_PAT="self-environ-leak-test"
 export MY_SECRET_TOKEN="pattern-environ-leak-test"
-if sandbox bash -c '
+if sandbox_must_run bash -c '
     if [[ -r /proc/self/environ ]]; then
         if cat /proc/self/environ 2>/dev/null | tr "\0" "\n" | grep -qE "^GITHUB_PAT=|^MY_SECRET_TOKEN="; then
             echo "LEAKED"
@@ -2923,13 +3230,13 @@ if sandbox bash -c '
         echo "UNREADABLE"
     fi
 '; then
-    if [[ "$OUTPUT" == "LEAKED" ]]; then
+    if [[ "$OUTPUT" == *"LEAKED"* ]]; then
         fail "E01: Blocked vars leaked via /proc/self/environ"
+    elif [[ "$OUTPUT" == *"UNREADABLE"* ]]; then
+        pass "E01: /proc/self/environ unreadable (good)"
     else
         pass "E01: /proc/self/environ clean (blocked vars absent)"
     fi
-else
-    pass "E01: /proc/self/environ unreadable (good)"
 fi
 unset GITHUB_PAT MY_SECRET_TOKEN
 
@@ -2939,7 +3246,7 @@ unset GITHUB_PAT MY_SECRET_TOKEN
 if is_bwrap; then
     export GITHUB_PAT="proc1-environ-leak-test"
     export MY_SECRET_TOKEN="pattern-proc1-leak-test"
-    if sandbox bash -c '
+    if sandbox_must_run bash -c '
         if [[ -r /proc/1/environ ]]; then
             if cat /proc/1/environ 2>/dev/null | tr "\0" "\n" | grep -qE "^GITHUB_PAT=|^MY_SECRET_TOKEN="; then
                 echo "LEAKED"
@@ -2950,13 +3257,13 @@ if is_bwrap; then
             echo "UNREADABLE"
         fi
     '; then
-        if [[ "$OUTPUT" == "LEAKED" ]]; then
+        if [[ "$OUTPUT" == *"LEAKED"* ]]; then
             fail "E02: Blocked vars leaked via /proc/1/environ (bwrap PID 1)"
+        elif [[ "$OUTPUT" == *"UNREADABLE"* ]]; then
+            pass "E02: /proc/1/environ unreadable (good)"
         else
             pass "E02: /proc/1/environ clean — bwrap parent scrub works"
         fi
-    else
-        pass "E02: /proc/1/environ unreadable (good)"
     fi
     unset GITHUB_PAT MY_SECRET_TOKEN
 fi
@@ -3041,7 +3348,7 @@ else
             _TOKEN_PATH=$(bash -c "source '$SCRIPT_DIR/sandbox.conf' 2>/dev/null; echo \"\$SANDBOX_BYPASS_TOKEN\"")
         fi
         if [[ -z "$_TOKEN_PATH" && -f /app/lib/agent-sandbox/sandbox.conf ]]; then
-            _TOKEN_PATH=$(bash -c 'source /app/lib/agent-sandbox/sandbox.conf 2>/dev/null; echo "$TOKEN_FILE"')
+            _TOKEN_PATH=$(bash -c 'source /app/lib/agent-sandbox/sandbox.conf 2>/dev/null; echo "$SANDBOX_BYPASS_TOKEN"')
         fi
         if [[ -n "$_TOKEN_PATH" && -f "$_TOKEN_PATH" ]]; then
             # Landlock sets NO_NEW_PRIVS — eBPF should deny the read
