@@ -1201,8 +1201,11 @@ mkdir -p "$HOME/.config/agent-sandbox/conf.d"
 # Inject a fake key and block it. Aider declares OPENAI_API_KEY +
 # ANTHROPIC_API_KEY; setting one and blocking it should trigger the
 # "credentials present but blocked" warning.
+# Override SANDBOX_QUIET=false for warning tests (global SANDBOX_QUIET=true
+# suppresses _check_agent_requirements entirely).
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+SANDBOX_QUIET=false
 CONF
 _raw_warn=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
@@ -1216,6 +1219,7 @@ fi
 # Without credentials set, no warning should fire.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+SANDBOX_QUIET=false
 CONF
 _raw_quiet=$(OPENAI_API_KEY= ANTHROPIC_API_KEY= timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
@@ -1229,6 +1233,7 @@ fi
 # SUPPRESS_AGENT_WARNINGS silences warnings even when credentials are blocked.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+SANDBOX_QUIET=false
 SUPPRESS_AGENT_WARNINGS=("aider")
 CONF
 _raw_sup=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
@@ -1243,6 +1248,7 @@ fi
 # "all" silences every agent.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+SANDBOX_QUIET=false
 SUPPRESS_AGENT_WARNINGS=("all")
 CONF
 _raw_all=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
@@ -1295,10 +1301,10 @@ fi
 rm -rf "$_malicious_dir"
 
 # ── AGENT_AUTH_MARKERS suppresses the warning when a marker file exists ──
-# Create a throwaway agent profile with a marker that points to a
-# file we create. The warning should NOT fire (credentials are
-# "reachable" via the marker). Then remove the marker and confirm
-# the warning fires again.
+# Create a throwaway agent profile with a credential env var that IS set
+# but blocked. With an auth marker present, the warning should NOT fire
+# (file-based auth is available). Remove the marker and confirm the
+# "credentials present but blocked" warning fires.
 
 _marker_agent_dir="$SCRIPT_DIR/agents/_marker_test"
 mkdir -p "$_marker_agent_dir"
@@ -1310,33 +1316,43 @@ agent_prepare_config() { :; }
 agent_get_env_exports() { :; }
 OVERLAY
 cat > "$_marker_agent_dir/config.conf" <<META
-AGENT_CREDENTIAL_ENV_VARS=("SOME_NONEXISTENT_VAR_\$\$")
+AGENT_CREDENTIAL_ENV_VARS=("MARKER_TEST_API_KEY")
 AGENT_AUTH_MARKERS=("$_marker_file")
 AGENT_REQUIRED_WRITABLE_PATHS=()
 AGENT_REQUIRED_READABLE_PATHS=()
 AGENT_LOGIN_HINT="test marker"
 META
 
-# With marker present → warning should NOT fire for this agent.
-_with_marker=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+# Override SANDBOX_QUIET and block the env var via empty ALLOWED_ENV_VARS.
+_warn_conf="$HOME/.config/agent-sandbox/conf.d/test-agent-warn-$$.conf"
+cat > "$_warn_conf" <<'CONF'
+ALLOWED_ENV_VARS=()
+SANDBOX_QUIET=false
+CONF
+
+# With marker present → warning should NOT fire (auth marker available).
+_with_marker=$(MARKER_TEST_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
-if echo "$_with_marker" | grep -q "^sandbox: warning: _marker_test: no credentials"; then
+if echo "$_with_marker" | grep -q "^sandbox: warning: _marker_test:"; then
     fail "AGENT_AUTH_MARKERS did not suppress warning when marker exists" "$_with_marker"
 else
     pass "AGENT_AUTH_MARKERS suppresses warning when marker file exists"
 fi
 
-# With marker removed → warning SHOULD fire.
+# With marker removed → warning SHOULD fire (env var blocked, no fallback).
 rm -f "$_marker_file"
-_without_marker=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+_without_marker=$(MARKER_TEST_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
-if echo "$_without_marker" | grep -q "^sandbox: warning: _marker_test: no credentials"; then
+if echo "$_without_marker" | grep -q "^sandbox: warning: _marker_test: credentials present but blocked"; then
     pass "AGENT_AUTH_MARKERS warning fires when marker absent"
 else
     fail "AGENT_AUTH_MARKERS warning did not fire when marker absent" "$_without_marker"
 fi
 
 rm -rf "$_marker_agent_dir"
+rm -f "$_warn_conf"
 
 # ── Auto-mkdir of HOME_WRITABLE entries ──
 # Missing agent config dirs should be pre-created so first-run auth
@@ -3157,11 +3173,12 @@ else
     skip "PRIVATE_IPC: SysV IPC — Landlock has no IPC namespace support"
 fi
 
-# PRIVATE_IPC: /dev/shm isolation. bwrap/firejail mount a private tmpfs; on
-# landlock /dev/shm is shared with the host.
+# PRIVATE_IPC: /dev/shm isolation. bwrap mounts a private tmpfs; firejail
+# blacklists /dev/shm (firejail's --tmpfs is silently ignored on /dev paths);
+# landlock has no namespace support so /dev/shm is shared with the host.
 _shm_marker="/dev/shm/sandbox-probe-$$"
 _TEST_TEMP_FILES+=("$_shm_marker")
-if sandbox bash -c "echo inside > '$_shm_marker'"; then
+if sandbox bash -c "echo inside > '$_shm_marker'" 2>/dev/null; then
     if has_mount_ns; then
         if [[ ! -f "$_shm_marker" ]]; then
             pass "PRIVATE_IPC: /dev/shm writes ephemeral (private tmpfs)"
@@ -3178,7 +3195,13 @@ if sandbox bash -c "echo inside > '$_shm_marker'"; then
         rm -f "$_shm_marker"
     fi
 else
-    skip "PRIVATE_IPC: /dev/shm not writable inside sandbox"
+    if has_mount_ns; then
+        # Write was blocked (e.g., firejail --blacklist=/dev/shm) — that's
+        # effective isolation, just via blocking rather than private tmpfs.
+        pass "PRIVATE_IPC: /dev/shm blocked inside sandbox"
+    else
+        skip "PRIVATE_IPC: /dev/shm not writable inside sandbox"
+    fi
 fi
 
 # ── SANDBOX_NPROC_LIMIT: fork-bomb defense (ulimit -u observation) ──

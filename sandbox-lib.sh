@@ -1196,17 +1196,27 @@ _check_agent_requirements() {
         # marker files that exist but are under a blocked/hidden path.
         # If the user simply hasn't set up the agent yet (no env var, no
         # auth files), that's not a sandbox concern — stay silent.
-        local _masked_vars=() _v
-        for _v in "${_cred_env[@]}"; do
-            # Var is set in outer env but would NOT reach the sandbox
-            [[ -n "${!_v:-}" ]] && ! _env_var_reachable "$_v" && _masked_vars+=("$_v")
+        # Auth markers (file-based credentials) suppress the warning:
+        # if the agent can authenticate via files, blocking the env var
+        # is harmless.
+        local _has_auth_marker=false _m
+        for _m in "${_auth_mark[@]}"; do
+            [[ -e "$_m" ]] && { _has_auth_marker=true; break; }
         done
 
-        if [[ ${#_masked_vars[@]} -gt 0 ]]; then
-            echo "sandbox: warning: ${agent_name}: credentials present but blocked" >&2
-            echo "  blocked env vars: ${_masked_vars[*]}" >&2
-            echo "  add to ALLOWED_ENV_VARS in sandbox.conf to let them through" >&2
-            echo "  silence with: SUPPRESS_AGENT_WARNINGS+=(\"${agent_name}\") in sandbox.conf" >&2
+        if ! $_has_auth_marker; then
+            local _masked_vars=() _v
+            for _v in "${_cred_env[@]}"; do
+                # Var is set in outer env but would NOT reach the sandbox
+                [[ -n "${!_v:-}" ]] && ! _env_var_reachable "$_v" && _masked_vars+=("$_v")
+            done
+
+            if [[ ${#_masked_vars[@]} -gt 0 ]]; then
+                echo "sandbox: warning: ${agent_name}: credentials present but blocked" >&2
+                echo "  blocked env vars: ${_masked_vars[*]}" >&2
+                echo "  add to ALLOWED_ENV_VARS in sandbox.conf to let them through" >&2
+                echo "  silence with: SUPPRESS_AGENT_WARNINGS+=(\"${agent_name}\") in sandbox.conf" >&2
+            fi
         fi
 
         # ─ Path reachability check ─

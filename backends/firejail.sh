@@ -111,10 +111,13 @@ backend_prepare() {
     # or host-to-sandbox shared memory.
     if _is_true "${PRIVATE_IPC:-true}"; then
         FIREJAIL_ARGS+=(--ipc-namespace)
-        # --ipc-namespace gives a new SysV IPC namespace but does NOT
-        # mount a private /dev/shm. Without this, POSIX shared memory
-        # writes leak to the host (matching bwrap's --tmpfs /dev/shm).
-        FIREJAIL_ARGS+=(--tmpfs=/dev/shm)
+        # --ipc-namespace gives a new SysV IPC namespace (SysV shm,
+        # semaphores, message queues) but does NOT mount a private
+        # /dev/shm for POSIX shared memory. Firejail's --tmpfs is
+        # silently ignored on /dev paths. Block /dev/shm entirely so
+        # sandboxed processes cannot leak state via POSIX shared memory.
+        # If shared memory is needed, set PRIVATE_IPC=false.
+        FIREJAIL_ARGS+=(--blacklist=/dev/shm)
     fi
 
     # PID namespace is enabled by default in firejail (no flag needed).
