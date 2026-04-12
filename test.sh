@@ -777,22 +777,27 @@ else
     fi
     rm -f /tmp/.home-write-$$ "$_write_probe"
 
-    # Always-blocked credential dirs must STILL be hidden in write mode.
+    # Always-blocked credential dirs must STILL have their CONTENTS hidden
+    # in write mode. Note: bwrap's --tmpfs leaves the mount point itself
+    # visible as an empty tmpfs — testing `test -d` would falsely report
+    # a "leak". The real security guarantee is that the CONTENTS (keys,
+    # tokens, configs) are unreachable. Assert on content absence instead.
     for _blocked in .ssh .aws .gnupg; do
-        if [[ -d "$HOME/$_blocked" ]]; then
+        if [[ -d "$HOME/$_blocked" && -n "$(ls -A "$HOME/$_blocked" 2>/dev/null)" ]]; then
             if HOME_ACCESS=write "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
                    --project-dir "$PROJECT_DIR" -- bash -c \
-                   "test -d \"\$HOME/$_blocked\" && echo VISIBLE || echo HIDDEN" \
+                   "ls -A \"\$HOME/$_blocked\" 2>/dev/null | head -1" \
                    >/tmp/.home-write-$$ 2>/dev/null; then
-                if grep -q HIDDEN /tmp/.home-write-$$; then
-                    pass "HOME_ACCESS=write: ~/$_blocked still hidden (always-blocked)"
+                if [[ ! -s /tmp/.home-write-$$ ]]; then
+                    pass "HOME_ACCESS=write: ~/$_blocked contents hidden (always-blocked)"
                 else
-                    fail "HOME_ACCESS=write: ~/$_blocked visible (credential leak)"
+                    fail "HOME_ACCESS=write: ~/$_blocked contents visible (credential leak)" \
+                         "leaked entry: $(cat /tmp/.home-write-$$)"
                 fi
             fi
             rm -f /tmp/.home-write-$$
         else
-            skip "HOME_ACCESS=write: ~/$_blocked not present on host"
+            skip "HOME_ACCESS=write: ~/$_blocked not present or empty on host"
         fi
     done
 fi
@@ -1628,7 +1633,7 @@ else
     if sandbox sbatch --uid=0 --wrap="echo pwned"; then
         fail "sbatch --uid=0 should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|blocked\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
             pass "Chaperon rejects --uid flag"
         else
             fail "Chaperon did not clearly reject --uid" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
@@ -1638,7 +1643,7 @@ else
     if sandbox sbatch --get-user-env --wrap="echo pwned"; then
         fail "sbatch --get-user-env should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|blocked\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
             pass "Chaperon rejects --get-user-env flag"
         else
             fail "Chaperon did not clearly reject --get-user-env" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
@@ -1652,7 +1657,7 @@ else
     if sandbox sbatch --export=ALL --wrap="echo pwned"; then
         fail "sbatch --export=ALL should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|blocked\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
             pass "Chaperon rejects --export=ALL flag"
         else
             fail "Chaperon did not clearly reject --export=ALL" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
@@ -1662,7 +1667,7 @@ else
     if sandbox sbatch --prolog=/tmp/foo.sh --wrap="echo pwned"; then
         fail "sbatch --prolog should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|blocked\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
             pass "Chaperon rejects --prolog flag"
         else
             fail "Chaperon did not clearly reject --prolog" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
@@ -1672,7 +1677,7 @@ else
     if sandbox sbatch --container=bogus.sif --wrap="echo pwned"; then
         fail "sbatch --container should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|blocked\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
             pass "Chaperon rejects --container flag"
         else
             fail "Chaperon did not clearly reject --container" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
@@ -1682,7 +1687,7 @@ else
     if sandbox sbatch --chdir=/etc --wrap="echo pwned"; then
         fail "sbatch --chdir should be rejected by chaperon"
     else
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|blocked\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "is not allowed\|blocked for security\|denied"; then
             pass "Chaperon rejects --chdir flag"
         else
             fail "Chaperon did not clearly reject --chdir" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
