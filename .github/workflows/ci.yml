@@ -120,6 +120,14 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
           sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
 
+      - name: Start an outer tmux server (for socket-isolation test)
+        # Creates /tmp/tmux-$UID/, which the isolation assertion expects
+        # to exist outside the sandbox and be hidden inside it. Without
+        # this, the test skips on a vanilla ubuntu-latest runner.
+        run: |
+          tmux new-session -d -s ci-outer-tmux
+          test -d "/tmp/tmux-$(id -u)"
+
       - name: Run full test suite (bwrap)
         # Section 6 (chaperon functional tests, submits real Slurm jobs)
         # auto-skips when sbatch is absent — clean on ubuntu-latest.
@@ -156,6 +164,12 @@ jobs:
 
       - name: Install firejail
         run: sudo apt-get update && sudo apt-get install -y firejail
+
+      - name: Start an outer tmux server (for socket-isolation test)
+        # See the matching step in test-bwrap for rationale.
+        run: |
+          tmux new-session -d -s ci-outer-tmux
+          test -d "/tmp/tmux-$(id -u)"
 
       - name: Run full test suite (firejail)
         run: bash test.sh --backend firejail
@@ -205,6 +219,12 @@ jobs:
           sinfo
           srun --version
           sbatch --wrap "echo hello-from-slurm" | grep -qE "Submitted batch job [0-9]+"
+
+      - name: Start an outer tmux server (for socket-isolation test)
+        # See the matching step in test-bwrap for rationale.
+        run: |
+          tmux new-session -d -s ci-outer-tmux
+          test -d "/tmp/tmux-$(id -u)"
 
       - name: Run full test suite (bwrap) with live Slurm
         run: bash test.sh --backend bwrap
