@@ -10,21 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 All sandbox permissions (readable/writable paths, blocked files, allowed
 env vars) now live in the sandbox configuration layer — `sandbox.conf`
 plus the admin config and per-project `conf.d/*.conf` overrides.
-Per-agent profiles are strictly declarative; a guardrail aborts sandbox
-start if an agent's `overlay.sh` mutates any permission global. Agent
-API keys are allowed by default so agents work out of the box.
+Per-agent profiles are strictly declarative; each `overlay.sh` runs in a
+subshell so mutations to permission globals are structurally impossible.
+Agent API keys are allowed by default so agents work out of the box.
 
 ### Security
 
 - **Admin-bypass fix:** the old `_apply_agent_profiles` could remove
   admin-enforced entries from `BLOCKED_ENV_VARS` via
-  `AGENT_UNBLOCK_ENV_VARS`. Agent profiles can no longer mutate
-  permission globals; a snapshot-and-diff guardrail around each
-  `overlay.sh` aborts the sandbox start if they try. Affected globals:
-  `BLOCKED_FILES`, `BLOCKED_ENV_VARS`, `BLOCKED_ENV_PATTERNS`,
-  `ALLOWED_ENV_VARS`, `EXTRA_BLOCKED_PATHS`, `HOME_READONLY`,
-  `HOME_WRITABLE`, `EXTRA_WRITABLE_PATHS`, `READONLY_MOUNTS`,
-  `DENIED_WRITABLE_PATHS`.
+  `AGENT_UNBLOCK_ENV_VARS`. Agent overlays now run in subshells with
+  outputs marshalled via a tagged-line stdout protocol, so mutations to
+  permission globals (`BLOCKED_FILES`, `BLOCKED_ENV_VARS`,
+  `BLOCKED_ENV_PATTERNS`, `ALLOWED_ENV_VARS`, `EXTRA_BLOCKED_PATHS`,
+  `HOME_READONLY`, `HOME_WRITABLE`, `EXTRA_WRITABLE_PATHS`,
+  `READONLY_MOUNTS`, `DENIED_WRITABLE_PATHS`) are structurally
+  unrepresentable rather than caught after the fact.
 - **Firejail /var/tmp write leak:** firejail's `--private-tmp` only
   isolates `/tmp`, leaving `/var/tmp` writable on the host. Added
   `--blacklist=/var/tmp` to match bwrap/landlock isolation.
