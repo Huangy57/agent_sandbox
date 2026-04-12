@@ -18,7 +18,14 @@ msg="${*:-Agent notification}"
 #    Write to /dev/tty (the controlling terminal) rather than stdout,
 #    which is often redirected when called from agent hooks. Inside a
 #    tmux pane, /dev/tty points to the pty that tmux monitors for bells.
-printf '\a' > /dev/tty 2>/dev/null || true
+#
+#    Redirection order matters: `2>/dev/null` MUST come before
+#    `> /dev/tty`. Bash applies redirections left-to-right; if we wrote
+#    `> /dev/tty 2>/dev/null`, bash's "No such device or address" error
+#    would be emitted to the original stderr *before* the 2>/dev/null
+#    takes effect (agents invoked without a controlling terminal would
+#    see the error). Putting 2>/dev/null first silences it.
+printf '\a' 2>/dev/null > /dev/tty || true
 
 # 2. Outer tmux: relay via the chaperon (which runs outside the sandbox
 #    and rings the bell on the outer terminal to mark the tab).
