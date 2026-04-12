@@ -2056,9 +2056,32 @@ if command -v sbatch &>/dev/null && command -v scancel &>/dev/null; then
         warn "SLURM_SCOPE=session: could not submit probe job (best-effort test)"
     fi
     rm -f "$_scope_conf"
-    # SCOPE=user/=none widen scope and require submitting a job as a
-    # different user to verify. Multi-user setup is out of scope here.
-    skip "SLURM_SCOPE=user/=none: require multi-user setup (not tested)"
+
+    # Cross-user job visibility: the chaperon injects --me into all
+    # squeue invocations, so other users' jobs must be invisible
+    # regardless of SLURM_SCOPE. CI creates slurm-testuser with a
+    # running job; verify it's not visible even with the widest scope.
+    if id slurm-testuser &>/dev/null; then
+        _other_jid=$(squeue -u slurm-testuser -h -o "%i" 2>/dev/null | head -1)
+        if [[ -n "$_other_jid" ]]; then
+            _scope_conf_x="$HOME/.config/agent-sandbox/conf.d/test-scope-x-$$.conf"
+            _TEST_TEMP_FILES+=("$_scope_conf_x")
+            # Even SCOPE=none (widest) should not leak other users' jobs.
+            echo 'SLURM_SCOPE="none"' > "$_scope_conf_x"
+            if sandbox bash -c 'squeue 2>&1'; then
+                if echo "$OUTPUT $OUTPUT_ERR" | grep -q "$_other_jid"; then
+                    fail "Cross-user leak: slurm-testuser job $_other_jid visible in sandbox"
+                else
+                    pass "Other user's jobs invisible inside sandbox (SLURM_SCOPE=none)"
+                fi
+            fi
+            rm -f "$_scope_conf_x"
+        else
+            skip "Cross-user job visibility: slurm-testuser has no running jobs"
+        fi
+    else
+        skip "Cross-user job visibility: slurm-testuser not present (single-user setup)"
+    fi
 else
     skip "SLURM_SCOPE=session test: sbatch/scancel not on host"
 fi

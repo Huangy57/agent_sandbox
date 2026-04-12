@@ -276,6 +276,12 @@ jobs:
           srun --version
           sbatch --wrap "echo hello-from-slurm" | grep -qE "Submitted batch job [0-9]+"
 
+      - name: Create second user for cross-user Slurm visibility test
+        run: |
+          sudo useradd -m slurm-testuser
+          sudo -u slurm-testuser sbatch --wrap "sleep 300" \
+            | grep -qE "Submitted batch job [0-9]+"
+
       - name: Start an outer tmux server (for socket-isolation test)
         # See the matching step in test-bwrap for rationale.
         run: |
