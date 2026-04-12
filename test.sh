@@ -443,6 +443,136 @@ if has_mount_ns && [[ "${HOME_ACCESS:-tmpwrite}" != "read" && "${HOME_ACCESS:-tm
     done
 fi
 
+# HOME_ACCESS=read — real home visible, but writes rejected outside allowlist.
+# HOME_ACCESS=write — real home visible AND writable, persists to host, but
+# the always-blocked credential dirs (.ssh/.aws/.gnupg) remain hidden.
+# Landlock falls back to restricted because tmpwrite/read/write require a
+# mount namespace to remount $HOME — skip there.
+if is_landlock; then
+    skip "HOME_ACCESS=read — Landlock has no mount namespace (falls back to restricted)"
+    skip "HOME_ACCESS=write — Landlock has no mount namespace (falls back to restricted)"
+else
+    # --- HOME_ACCESS=read ---
+    # Real $HOME should be visible. Use ~/.bashrc as a "host fingerprint" when
+    # present — it's ordinary shell config, not usually in HOME_READONLY.
+    if HOME_ACCESS=read "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+           --project-dir "$PROJECT_DIR" -- bash -c '[[ -d $HOME ]] && echo DIR_OK || echo DIR_MISSING' \
+           >/tmp/.home-read-$$ 2>/dev/null; then
+        if grep -q DIR_OK /tmp/.home-read-$$; then
+            pass "HOME_ACCESS=read: \$HOME directory is reachable"
+        else
+            fail "HOME_ACCESS=read: \$HOME directory not reachable"
+        fi
+    else
+        fail "HOME_ACCESS=read: sandbox invocation failed"
+    fi
+    rm -f /tmp/.home-read-$$
+
+    if [[ -f "$HOME/.bashrc" ]]; then
+        if HOME_ACCESS=read "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+               --project-dir "$PROJECT_DIR" -- bash -c \
+               'test -f "$HOME/.bashrc" && echo VISIBLE || echo HIDDEN' \
+               >/tmp/.home-read-$$ 2>/dev/null; then
+            if grep -q VISIBLE /tmp/.home-read-$$; then
+                pass "HOME_ACCESS=read: real host ~/.bashrc is visible"
+            else
+                fail "HOME_ACCESS=read: ~/.bashrc hidden (read mode should show real home)"
+            fi
+        fi
+        rm -f /tmp/.home-read-$$
+    else
+        skip "HOME_ACCESS=read: ~/.bashrc not present to fingerprint real home"
+    fi
+
+    # Writes to arbitrary $HOME paths should FAIL in read mode.
+    _read_probe="$HOME/.sandbox-homeread-probe-$$"
+    if HOME_ACCESS=read "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+           --project-dir "$PROJECT_DIR" -- bash -c \
+           "touch '$_read_probe' 2>&1 && echo WROTE || echo BLOCKED" \
+           >/tmp/.home-read-$$ 2>/dev/null; then
+        if grep -q BLOCKED /tmp/.home-read-$$; then
+            pass "HOME_ACCESS=read: writes to \$HOME rejected"
+        elif grep -q WROTE /tmp/.home-read-$$; then
+            fail "HOME_ACCESS=read: arbitrary \$HOME write succeeded (should be read-only)"
+        fi
+    fi
+    rm -f /tmp/.home-read-$$
+    # Also remove the probe from the host in case it did leak through.
+    rm -f "$_read_probe"
+
+    # --- HOME_ACCESS=write ---
+    if HOME_ACCESS=write "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+           --project-dir "$PROJECT_DIR" -- bash -c '[[ -d $HOME ]] && echo DIR_OK || echo DIR_MISSING' \
+           >/tmp/.home-write-$$ 2>/dev/null; then
+        if grep -q DIR_OK /tmp/.home-write-$$; then
+            pass "HOME_ACCESS=write: \$HOME directory is reachable"
+        else
+            fail "HOME_ACCESS=write: \$HOME directory not reachable"
+        fi
+    else
+        fail "HOME_ACCESS=write: sandbox invocation failed"
+    fi
+    rm -f /tmp/.home-write-$$
+
+    if [[ -f "$HOME/.bashrc" ]]; then
+        if HOME_ACCESS=write "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+               --project-dir "$PROJECT_DIR" -- bash -c \
+               'test -f "$HOME/.bashrc" && echo VISIBLE || echo HIDDEN' \
+               >/tmp/.home-write-$$ 2>/dev/null; then
+            if grep -q VISIBLE /tmp/.home-write-$$; then
+                pass "HOME_ACCESS=write: real host ~/.bashrc is visible"
+            else
+                fail "HOME_ACCESS=write: ~/.bashrc hidden (write mode should show real home)"
+            fi
+        fi
+        rm -f /tmp/.home-write-$$
+    else
+        skip "HOME_ACCESS=write: ~/.bashrc not present to fingerprint real home"
+    fi
+
+    # Writes should SUCCEED and PERSIST to the host.  Use a per-pid unique
+    # filename and register in _TEST_TEMP_FILES so it's cleaned up even if
+    # the test exits unexpectedly.
+    _write_probe="$HOME/.sandbox-homewrite-probe-$$"
+    _TEST_TEMP_FILES+=("$_write_probe")
+    if HOME_ACCESS=write "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+           --project-dir "$PROJECT_DIR" -- bash -c \
+           "echo sandbox-wrote > '$_write_probe' && echo WROTE || echo BLOCKED" \
+           >/tmp/.home-write-$$ 2>/dev/null; then
+        if grep -q WROTE /tmp/.home-write-$$ && [[ -f "$_write_probe" ]]; then
+            if grep -q "sandbox-wrote" "$_write_probe" 2>/dev/null; then
+                pass "HOME_ACCESS=write: writes succeed and persist to host"
+            else
+                fail "HOME_ACCESS=write: probe file exists but content not persisted"
+            fi
+        elif grep -q BLOCKED /tmp/.home-write-$$; then
+            fail "HOME_ACCESS=write: write rejected (should be permitted)"
+        else
+            fail "HOME_ACCESS=write: probe file not visible on host (did not persist)"
+        fi
+    fi
+    rm -f /tmp/.home-write-$$ "$_write_probe"
+
+    # Always-blocked credential dirs must STILL be hidden in write mode.
+    for _blocked in .ssh .aws .gnupg; do
+        if [[ -d "$HOME/$_blocked" ]]; then
+            if HOME_ACCESS=write "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+                   --project-dir "$PROJECT_DIR" -- bash -c \
+                   "test -d \"\$HOME/$_blocked\" && echo VISIBLE || echo HIDDEN" \
+                   >/tmp/.home-write-$$ 2>/dev/null; then
+                if grep -q HIDDEN /tmp/.home-write-$$; then
+                    pass "HOME_ACCESS=write: ~/$_blocked still hidden (always-blocked)"
+                else
+                    fail "HOME_ACCESS=write: ~/$_blocked visible (credential leak)"
+                fi
+            fi
+            rm -f /tmp/.home-write-$$
+        else
+            skip "HOME_ACCESS=write: ~/$_blocked not present on host"
+        fi
+    done
+fi
+
 echo ""
 
 # ── 3. Environment variable blocking ────────────────────────────
@@ -2092,6 +2222,80 @@ if has_mount_ns; then
     fi
 else
     skip "G01: No PID namespace isolation ($CURRENT_BACKEND backend)"
+fi
+
+# ── PRIVATE_IPC: SysV IPC namespace isolation ──
+# README.md:308 / APPTAINER_COMPARISON.md:103 claim IPC namespace isolation
+# for bwrap (--unshare-ipc) and firejail (--ipc-namespace). Landlock has no
+# namespace support and cannot isolate IPC.
+if has_mount_ns; then
+    if command -v ipcmk &>/dev/null && command -v ipcs &>/dev/null; then
+        # First sandbox creates a SysV message queue, records its ID.
+        _ipc_id=""
+        if sandbox bash -c 'ipcmk --queue 2>/dev/null | grep -oE "[0-9]+$" | head -1'; then
+            _ipc_id="$OUTPUT"
+        fi
+        if [[ -n "$_ipc_id" ]]; then
+            # Second sandbox should NOT see that queue (IPC ns is per-invocation).
+            if sandbox bash -c "ipcs -q | grep -qE '^0x[0-9a-f]+ +$_ipc_id\\b' && echo VISIBLE || echo HIDDEN"; then
+                case "$OUTPUT" in
+                    HIDDEN)  pass "PRIVATE_IPC: SysV IPC isolated across sandbox sessions" ;;
+                    VISIBLE) fail "PRIVATE_IPC: SysV IPC queue from previous sandbox visible (namespace leak)" ;;
+                    *)       fail "PRIVATE_IPC: unexpected ipcs output" "$OUTPUT" ;;
+                esac
+            fi
+        else
+            skip "PRIVATE_IPC: ipcmk could not create a queue (no output / rlimit)"
+        fi
+    else
+        skip "PRIVATE_IPC: ipcmk/ipcs not available — can't test SysV IPC isolation"
+    fi
+else
+    skip "PRIVATE_IPC: SysV IPC — Landlock has no IPC namespace support"
+fi
+
+# PRIVATE_IPC: /dev/shm isolation. bwrap/firejail mount a private tmpfs; on
+# landlock /dev/shm is shared with the host.
+_shm_marker="/dev/shm/sandbox-probe-$$"
+_TEST_TEMP_FILES+=("$_shm_marker")
+if sandbox bash -c "echo inside > '$_shm_marker'"; then
+    if has_mount_ns; then
+        if [[ ! -f "$_shm_marker" ]]; then
+            pass "PRIVATE_IPC: /dev/shm writes ephemeral (private tmpfs)"
+        else
+            fail "PRIVATE_IPC: /dev/shm write leaked to host" "$_shm_marker"
+            rm -f "$_shm_marker"
+        fi
+    else
+        if [[ -f "$_shm_marker" ]]; then
+            pass "PRIVATE_IPC: /dev/shm shared with host (landlock: documented)"
+        else
+            warn "PRIVATE_IPC: landlock /dev/shm write not visible on host (unexpected)"
+        fi
+        rm -f "$_shm_marker"
+    fi
+else
+    skip "PRIVATE_IPC: /dev/shm not writable inside sandbox"
+fi
+
+# ── SANDBOX_NPROC_LIMIT: fork-bomb defense (ulimit -u observation) ──
+# RLIMIT_NPROC is per-UID system-wide, so we only verify ulimit -u is set
+# as documented; we do NOT actually fork-bomb (would hit the test runner).
+if sandbox bash -c 'ulimit -u'; then
+    _baseline_nproc="$OUTPUT"
+    _limited=$(SANDBOX_NPROC_LIMIT=128 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
+               --project-dir "$PROJECT_DIR" -- bash -c 'ulimit -u' 2>/dev/null)
+    if [[ -z "$_limited" ]]; then
+        fail "SANDBOX_NPROC_LIMIT: sandbox invocation with limit failed"
+    elif [[ "$_limited" == "128" ]]; then
+        pass "SANDBOX_NPROC_LIMIT caps ulimit -u as documented"
+    elif [[ "$_limited" =~ ^[0-9]+$ && "$_baseline_nproc" =~ ^[0-9]+$ && "$_limited" -lt "$_baseline_nproc" ]]; then
+        pass "SANDBOX_NPROC_LIMIT lowered ulimit (got $_limited from baseline $_baseline_nproc)"
+    else
+        fail "SANDBOX_NPROC_LIMIT had no effect (limited=$_limited baseline=$_baseline_nproc)"
+    fi
+else
+    skip "SANDBOX_NPROC_LIMIT: baseline 'ulimit -u' probe failed"
 fi
 
 echo ""
