@@ -1006,13 +1006,16 @@ generate_filtered_passwd() {
 #
 #   config.conf — DECLARATIVE metadata (env vars + paths the agent uses).
 #                 Read by _check_agent_requirements() to emit warnings
-#                 when declared needs look unreachable. MUST NOT mutate
-#                 sandbox permission globals; a guardrail in
-#                 prepare_agent_configs() aborts if it does.
+#                 when declared needs look unreachable. Sourced in a
+#                 subshell, so mutations to sandbox permission globals
+#                 cannot leak to the parent.
 #
 #   overlay.sh  — mechanical config merge (CLAUDE.md / AGENTS.md /
 #                 settings.json) and env-var export. Writes only to the
-#                 _AGENT_* staging arrays below.
+#                 _AGENT_* staging arrays below; run in a subshell by
+#                 prepare_agent_configs() with outputs marshalled via a
+#                 tagged-line stdout protocol, so mutations to permission
+#                 globals are structurally unable to reach the parent.
 #
 # All permission grants (HOME_WRITABLE, HOME_READONLY, BLOCKED_FILES,
 # ALLOWED_ENV_VARS, etc.) live in the sandbox configuration layer
@@ -1233,59 +1236,27 @@ _check_agent_requirements() {
     done
 }
 
-# ── Permission-mutation guardrail for overlays ────────────────────
-#
-# Overlays must only append to _AGENT_ENV_EXPORTS /
-# _AGENT_SANDBOX_CONFIG_DIRS / _AGENT_PROTECTED_FILES. If an overlay
-# mutates any permission-enforced global, abort immediately: a profile
-# must not be able to widen what the user and admin set in sandbox.conf.
-
-# Globals the guardrail watches. Mirrors the admin-enforced set plus
-# HOME_WRITABLE (which is admin-enforced in _enforce_admin_policy).
-_GUARDED_PERMISSION_ARRAYS=(
-    BLOCKED_FILES BLOCKED_ENV_VARS BLOCKED_ENV_PATTERNS ALLOWED_ENV_VARS
-    EXTRA_BLOCKED_PATHS HOME_READONLY HOME_WRITABLE
-    EXTRA_WRITABLE_PATHS READONLY_MOUNTS DENIED_WRITABLE_PATHS
-)
-
-# _snapshot_guarded_globals VARNAME — serialize each watched array into
-# the named associative array (declared by caller with `declare -A`).
-_snapshot_guarded_globals() {
-    local -n _snap=$1
-    local _name _ref
-    for _name in "${_GUARDED_PERMISSION_ARRAYS[@]}"; do
-        _ref="${_name}[@]"
-        # Join with an ASCII unit separator (\x1f) — unlikely in real values.
-        _snap["$_name"]="$(printf '%s\x1f' "${!_ref}")"
-    done
-}
-
-# _compare_guarded_globals SNAPVAR AGENT — diff current globals against
-# the snapshot. If any differ, print a sandbox-integrity error naming
-# the offending agent and return 1. Returns 0 on clean diff.
-_compare_guarded_globals() {
-    local -n _snap=$1
-    local _agent="$2"
-    local _name _ref _before _after
-    for _name in "${_GUARDED_PERMISSION_ARRAYS[@]}"; do
-        _ref="${_name}[@]"
-        _before="${_snap[$_name]}"
-        _after="$(printf '%s\x1f' "${!_ref}")"
-        if [[ "$_before" != "$_after" ]]; then
-            echo "sandbox: ERROR: agents/${_agent}/overlay.sh mutated \$${_name}" >&2
-            echo "  Agent overlays are not permitted to change sandbox permissions." >&2
-            echo "  All permission grants must live in the sandbox configuration" >&2
-            echo "  (sandbox.conf, admin config, or conf.d/*.conf). See README.md." >&2
-            return 1
-        fi
-    done
-    return 0
-}
-
 # prepare_agent_configs PROJECT_DIR — run every agent's overlay.sh.
 # All agents are always prepared (no detection); missing config dirs are
 # pre-created by _ensure_writable_home_dirs so first-run in-sandbox auth
-# persists. Each overlay runs with a permission-mutation guardrail.
+# persists.
+#
+# Each overlay runs in a SUBSHELL with the three staging arrays
+# pre-cleared. The overlay's only channel back to the parent is a tagged
+# line protocol on stdout: `ENV\t<value>`, `DIR\t<value>`, `FILE\t<value>`.
+# This makes overlay mutations of permission-enforced globals (BLOCKED_*,
+# HOME_*, ALLOWED_ENV_VARS, etc.) structurally impossible — they would
+# die in the subshell and never reach the parent. No snapshot/diff
+# guardrail is needed.
+#
+# The subshell still has filesystem access, so host-side side effects
+# (merging CLAUDE.md / AGENTS.md, creating sandbox-config/ dirs,
+# symlinking tokens) still work. A one-time ~1ms fork per agent on
+# sandbox start replaces the per-start snapshot-and-compare.
+#
+# Staging-array values are paths and env var assignments of the form
+# KEY=VALUE; real values never contain tabs or newlines, so the tagged
+# protocol needs no escaping.
 prepare_agent_configs() {
     local project_dir="$1"
     local agents_dir="$SANDBOX_DIR/agents"
@@ -1306,21 +1277,35 @@ prepare_agent_configs() {
         overlay="$agent_dir/overlay.sh"
         [[ -f "$overlay" ]] || continue
 
-        # Snapshot permission globals, source the overlay, compare.
-        # A mismatch is a contract violation; we abort the sandbox start
-        # rather than silently letting policy drift.
-        declare -A _perm_snapshot=()
-        _snapshot_guarded_globals _perm_snapshot
+        # Source + run the overlay in a subshell and marshal its staged
+        # outputs back via stdout. Command substitution aborts the
+        # surrounding `set -e` script if the subshell itself fails
+        # (e.g. syntax error in overlay, agent_prepare_config errors out)
+        # — sandbox start is aborted rather than silently missing config.
+        local _agent_out
+        _agent_out="$(
+            _AGENT_ENV_EXPORTS=()
+            _AGENT_SANDBOX_CONFIG_DIRS=()
+            _AGENT_PROTECTED_FILES=()
+            # shellcheck disable=SC1090
+            source "$overlay"
+            agent_prepare_config "$project_dir"
+            printf 'ENV\t%s\n'  "${_AGENT_ENV_EXPORTS[@]:-}"
+            printf 'DIR\t%s\n'  "${_AGENT_SANDBOX_CONFIG_DIRS[@]:-}"
+            printf 'FILE\t%s\n' "${_AGENT_PROTECTED_FILES[@]:-}"
+        )"
 
-        # shellcheck disable=SC1090
-        source "$overlay"
-        agent_prepare_config "$project_dir"
-
-        if ! _compare_guarded_globals _perm_snapshot "$agent_name"; then
-            unset _perm_snapshot
-            exit 1
-        fi
-        unset _perm_snapshot
+        # Parse tagged output back into the real arrays. Skip empty
+        # values (printf with an empty array under :- emits one blank).
+        local _tag _val
+        while IFS=$'\t' read -r _tag _val; do
+            [[ -n "$_val" ]] || continue
+            case "$_tag" in
+                ENV)  _AGENT_ENV_EXPORTS+=("$_val") ;;
+                DIR)  _AGENT_SANDBOX_CONFIG_DIRS+=("$_val") ;;
+                FILE) _AGENT_PROTECTED_FILES+=("$_val") ;;
+            esac
+        done <<< "$_agent_out"
     done
 }
 
