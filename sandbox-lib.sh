@@ -1191,29 +1191,21 @@ _check_agent_requirements() {
         done <<< "$_meta"
 
         # ─ Credential check ─
-        # Agent is authenticated if EITHER any credential env var is
-        # reachable, OR any auth marker file exists on the host.
-        local _has_cred=false _v _m
-        if [[ ${#_cred_env[@]} -gt 0 ]]; then
-            for _v in "${_cred_env[@]}"; do
-                _env_var_reachable "$_v" && { _has_cred=true; break; }
-            done
-        else
-            # No declared env vars → treat as "not requiring env cred".
-            _has_cred=true
-        fi
-        if ! $_has_cred; then
-            for _m in "${_auth_mark[@]}"; do
-                [[ -e "$_m" ]] && { _has_cred=true; break; }
-            done
-        fi
+        # Only warn when the sandbox is actively MASKING credentials the
+        # user has: env vars that are set but would be blocked, or auth
+        # marker files that exist but are under a blocked/hidden path.
+        # If the user simply hasn't set up the agent yet (no env var, no
+        # auth files), that's not a sandbox concern — stay silent.
+        local _masked_vars=() _v
+        for _v in "${_cred_env[@]}"; do
+            # Var is set in outer env but would NOT reach the sandbox
+            [[ -n "${!_v:-}" ]] && ! _env_var_reachable "$_v" && _masked_vars+=("$_v")
+        done
 
-        if ! $_has_cred; then
-            echo "sandbox: warning: ${agent_name}: no credentials reachable" >&2
-            if [[ ${#_cred_env[@]} -gt 0 ]]; then
-                echo "  tried env vars: ${_cred_env[*]}" >&2
-            fi
-            [[ -n "$_hint" ]] && echo "  $_hint" >&2
+        if [[ ${#_masked_vars[@]} -gt 0 ]]; then
+            echo "sandbox: warning: ${agent_name}: credentials present but blocked" >&2
+            echo "  blocked env vars: ${_masked_vars[*]}" >&2
+            echo "  add to ALLOWED_ENV_VARS in sandbox.conf to let them through" >&2
             echo "  silence with: SUPPRESS_AGENT_WARNINGS+=(\"${agent_name}\") in sandbox.conf" >&2
         fi
 

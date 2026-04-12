@@ -30,6 +30,7 @@ PROJECT_DIR=""
 # rely solely on sandbox-lib.sh hardcoded defaults and miss user-config-only
 # settings like per-project overrides.
 export SANDBOX_CONF="$SCRIPT_DIR/sandbox.conf"
+export SANDBOX_QUIET=true
 
 VERBOSE=false
 BACKEND_FLAG=""
@@ -1190,57 +1191,67 @@ fi
 # and other agent API keys, so a per-key test here would be redundant.
 
 # ── Agent-requirement warnings ──
-# An agent with no credentials and SUPPRESS_AGENT_WARNINGS unset should
-# emit a warning; suppression should silence it. We use a throwaway
-# conf.d override that unsets ANTHROPIC_API_KEY from ALLOWED_ENV_VARS
-# so the Claude warning fires independent of the user's env.
+# Warnings should only fire when credentials are PRESENT but BLOCKED by
+# the sandbox — not when they simply aren't set. Test by injecting a
+# fake OPENAI_API_KEY and blocking it via ALLOWED_ENV_VARS=().
 _warn_conf="$HOME/.config/agent-sandbox/conf.d/test-agent-warn-$$.conf"
 _TEST_TEMP_FILES+=("$_warn_conf")
 mkdir -p "$HOME/.config/agent-sandbox/conf.d"
 
-# Only run this warning test if the user has no Aider auth in the env
-# (so the warning reliably fires). Aider has no auth markers, so the
-# signal is purely env-var based.
-if [[ -z "${OPENAI_API_KEY:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    # With both keys removed from ALLOWED_ENV_VARS, Aider has nothing.
-    cat > "$_warn_conf" <<'CONF'
+# Inject a fake key and block it. Aider declares OPENAI_API_KEY +
+# ANTHROPIC_API_KEY; setting one and blocking it should trigger the
+# "credentials present but blocked" warning.
+cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
 CONF
-    _raw_warn=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
-        --project-dir "$PROJECT_DIR" -- true 2>&1)
-    if echo "$_raw_warn" | grep -q "^sandbox: warning: aider: no credentials reachable"; then
-        pass "Missing credentials trigger per-agent warning (aider)"
-    else
-        fail "Expected aider credential warning not emitted" "$_raw_warn"
-    fi
+_raw_warn=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" \
+    --project-dir "$PROJECT_DIR" -- true 2>&1)
+if echo "$_raw_warn" | grep -q "^sandbox: warning: aider: credentials present but blocked"; then
+    pass "Blocked credentials trigger per-agent warning (aider)"
+else
+    fail "Expected aider blocked-credential warning not emitted" "$_raw_warn"
+fi
 
-    # Now suppress just aider.
-    cat > "$_warn_conf" <<'CONF'
+# Without credentials set, no warning should fire.
+cat > "$_warn_conf" <<'CONF'
+ALLOWED_ENV_VARS=()
+CONF
+_raw_quiet=$(OPENAI_API_KEY= ANTHROPIC_API_KEY= timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" \
+    --project-dir "$PROJECT_DIR" -- true 2>&1)
+if echo "$_raw_quiet" | grep -q "^sandbox: warning: aider:"; then
+    fail "Warning fired for absent credentials (should only warn when blocked)" "$_raw_quiet"
+else
+    pass "No warning when credentials are simply absent"
+fi
+
+# SUPPRESS_AGENT_WARNINGS silences warnings even when credentials are blocked.
+cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
 SUPPRESS_AGENT_WARNINGS=("aider")
 CONF
-    _raw_sup=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
-        --project-dir "$PROJECT_DIR" -- true 2>&1)
-    if echo "$_raw_sup" | grep -q "^sandbox: warning: aider:"; then
-        fail "SUPPRESS_AGENT_WARNINGS did not silence aider warning" "$_raw_sup"
-    else
-        pass "SUPPRESS_AGENT_WARNINGS silences per-agent warning"
-    fi
+_raw_sup=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" \
+    --project-dir "$PROJECT_DIR" -- true 2>&1)
+if echo "$_raw_sup" | grep -q "^sandbox: warning: aider:"; then
+    fail "SUPPRESS_AGENT_WARNINGS did not silence aider warning" "$_raw_sup"
+else
+    pass "SUPPRESS_AGENT_WARNINGS silences per-agent warning"
+fi
 
-    # "all" silences every agent.
-    cat > "$_warn_conf" <<'CONF'
+# "all" silences every agent.
+cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
 SUPPRESS_AGENT_WARNINGS=("all")
 CONF
-    _raw_all=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
-        --project-dir "$PROJECT_DIR" -- true 2>&1)
-    if echo "$_raw_all" | grep -q "^sandbox: warning: .*: no credentials reachable"; then
-        fail "SUPPRESS_AGENT_WARNINGS=(all) did not silence warnings" "$_raw_all"
-    else
-        pass "SUPPRESS_AGENT_WARNINGS=(all) silences every agent warning"
-    fi
+_raw_all=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" \
+    --project-dir "$PROJECT_DIR" -- true 2>&1)
+if echo "$_raw_all" | grep -q "^sandbox: warning: .*: credentials present but blocked"; then
+    fail "SUPPRESS_AGENT_WARNINGS=(all) did not silence warnings" "$_raw_all"
 else
-    skip "Credential-warning test (skipped: user has OPENAI_API_KEY or ANTHROPIC_API_KEY in env)"
+    pass "SUPPRESS_AGENT_WARNINGS=(all) silences every agent warning"
 fi
 rm -f "$_warn_conf"
 
