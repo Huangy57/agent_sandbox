@@ -1201,13 +1201,12 @@ mkdir -p "$HOME/.config/agent-sandbox/conf.d"
 # Inject a fake key and block it. Aider declares OPENAI_API_KEY +
 # ANTHROPIC_API_KEY; setting one and blocking it should trigger the
 # "credentials present but blocked" warning.
-# Override SANDBOX_QUIET=false for warning tests (global SANDBOX_QUIET=true
-# suppresses _check_agent_requirements entirely).
+# SANDBOX_QUIET must be overridden via env prefix (not conf.d) because
+# sandbox-exec.sh restores env overrides AFTER loading conf.d.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
-SANDBOX_QUIET=false
 CONF
-_raw_warn=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+_raw_warn=$(SANDBOX_QUIET=false OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
 if echo "$_raw_warn" | grep -q "^sandbox: warning: aider: credentials present but blocked"; then
@@ -1217,11 +1216,7 @@ else
 fi
 
 # Without credentials set, no warning should fire.
-cat > "$_warn_conf" <<'CONF'
-ALLOWED_ENV_VARS=()
-SANDBOX_QUIET=false
-CONF
-_raw_quiet=$(OPENAI_API_KEY= ANTHROPIC_API_KEY= timeout 15 "$SANDBOX_EXEC" \
+_raw_quiet=$(SANDBOX_QUIET=false OPENAI_API_KEY= ANTHROPIC_API_KEY= timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
 if echo "$_raw_quiet" | grep -q "^sandbox: warning: aider:"; then
@@ -1233,10 +1228,9 @@ fi
 # SUPPRESS_AGENT_WARNINGS silences warnings even when credentials are blocked.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
-SANDBOX_QUIET=false
 SUPPRESS_AGENT_WARNINGS=("aider")
 CONF
-_raw_sup=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+_raw_sup=$(SANDBOX_QUIET=false OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
 if echo "$_raw_sup" | grep -q "^sandbox: warning: aider:"; then
@@ -1248,10 +1242,9 @@ fi
 # "all" silences every agent.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
-SANDBOX_QUIET=false
 SUPPRESS_AGENT_WARNINGS=("all")
 CONF
-_raw_all=$(OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+_raw_all=$(SANDBOX_QUIET=false OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
 if echo "$_raw_all" | grep -q "^sandbox: warning: .*: credentials present but blocked"; then
@@ -1323,15 +1316,15 @@ AGENT_REQUIRED_READABLE_PATHS=()
 AGENT_LOGIN_HINT="test marker"
 META
 
-# Override SANDBOX_QUIET and block the env var via empty ALLOWED_ENV_VARS.
+# Block the env var via empty ALLOWED_ENV_VARS. SANDBOX_QUIET must be
+# overridden via env prefix (env takes precedence over conf.d).
 _warn_conf="$HOME/.config/agent-sandbox/conf.d/test-agent-warn-$$.conf"
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
-SANDBOX_QUIET=false
 CONF
 
 # With marker present → warning should NOT fire (auth marker available).
-_with_marker=$(MARKER_TEST_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+_with_marker=$(SANDBOX_QUIET=false MARKER_TEST_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
 if echo "$_with_marker" | grep -q "^sandbox: warning: _marker_test:"; then
@@ -1342,7 +1335,7 @@ fi
 
 # With marker removed → warning SHOULD fire (env var blocked, no fallback).
 rm -f "$_marker_file"
-_without_marker=$(MARKER_TEST_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
+_without_marker=$(SANDBOX_QUIET=false MARKER_TEST_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
     --project-dir "$PROJECT_DIR" -- true 2>&1)
 if echo "$_without_marker" | grep -q "^sandbox: warning: _marker_test: credentials present but blocked"; then
@@ -1909,7 +1902,9 @@ SCRIPT
         fi
     else
         # Non-zero exit is also acceptable IF chaperon clearly rejected.
-        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "not allowed\|denied\|blocked\|error"; then
+        # "unexpected positional argument" means the handler caught the
+        # script path — that's a valid rejection path.
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "not allowed\|denied\|blocked\|error\|unexpected"; then
             pass "Chaperon rejects scripts containing #SBATCH --export=ALL"
         else
             fail "sbatch on script with #SBATCH --export=ALL failed without clear rejection" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
