@@ -443,6 +443,103 @@ if has_mount_ns && [[ "${HOME_ACCESS:-tmpwrite}" != "read" && "${HOME_ACCESS:-tm
     done
 fi
 
+# ── /tmp isolation ──
+# bwrap/firejail replace /tmp with a private tmpfs; landlock shares the
+# real host /tmp (documented tradeoff — see ADMIN_INSTALL.md). Verify
+# both directions: host files should be hidden under mount-ns, and writes
+# from inside should not leak to the host.
+
+_host_canary="/tmp/sandbox-host-canary-$$"
+_TEST_TEMP_FILES+=("$_host_canary")
+echo "host-canary" > "$_host_canary" 2>/dev/null
+if [[ -f "$_host_canary" ]]; then
+    if sandbox bash -c "test -f '$_host_canary' && echo VISIBLE || echo HIDDEN"; then
+        if has_mount_ns; then
+            if [[ "$OUTPUT" == "HIDDEN" ]]; then
+                pass "/tmp host files hidden (private tmpfs)"
+            else
+                fail "/tmp host canary visible inside sandbox (isolation leak)" "$OUTPUT"
+            fi
+        else
+            if [[ "$OUTPUT" == "VISIBLE" ]]; then
+                pass "/tmp shared with host (landlock: documented tradeoff)"
+            else
+                fail "landlock /tmp unexpectedly hidden" "$OUTPUT"
+            fi
+        fi
+    fi
+    rm -f "$_host_canary"
+else
+    skip "/tmp isolation — could not create host canary ($_host_canary)"
+fi
+
+_inside_canary="/tmp/sandbox-inside-canary-$$"
+_TEST_TEMP_FILES+=("$_inside_canary")
+if sandbox bash -c "echo inside > '$_inside_canary' 2>/dev/null && echo WROTE || echo BLOCKED"; then
+    if [[ "$OUTPUT" == "WROTE" ]]; then
+        if has_mount_ns; then
+            if [[ ! -f "$_inside_canary" ]]; then
+                pass "/tmp writes ephemeral (tmpfs, not leaked to host)"
+            else
+                fail "/tmp write from sandbox persisted on host (isolation leak)" "$_inside_canary"
+                rm -f "$_inside_canary"
+            fi
+        else
+            if [[ -f "$_inside_canary" ]]; then
+                pass "/tmp writes persist on host (landlock: shared /tmp)"
+                rm -f "$_inside_canary"
+            else
+                warn "landlock /tmp write claimed success but file not on host"
+            fi
+        fi
+    else
+        # /tmp is writable by design on all backends; a BLOCKED result
+        # would be a surprising regression worth flagging.
+        fail "/tmp not writable inside sandbox (mktemp, /tmp-based tools will break)"
+    fi
+fi
+
+# ── Outside-project write isolation ──
+# Neither /var/tmp nor the project dir's parent should be writable:
+# they aren't in any granted HOME_WRITABLE / EXTRA_WRITABLE_PATHS, so
+# writes should fail on all backends (ENOENT under mount-ns, EACCES
+# under landlock).
+
+_vartmp_probe="/var/tmp/sandbox-probe-$$"
+_TEST_TEMP_FILES+=("$_vartmp_probe")
+if sandbox bash -c "touch '$_vartmp_probe' 2>/dev/null && echo WROTE || echo BLOCKED"; then
+    if [[ "$OUTPUT" == "BLOCKED" ]]; then
+        pass "/var/tmp not writable from sandbox"
+    else
+        fail "/var/tmp writable from sandbox (unexpected — not in granted paths)"
+        rm -f "$_vartmp_probe"
+    fi
+fi
+
+# Parent of the project dir (one level up). If project_dir is $HOME itself
+# or / (shouldn't be, but guard), skip.
+_project_parent="$(dirname "$PROJECT_DIR")"
+if [[ -n "$_project_parent" && "$_project_parent" != "/" && "$_project_parent" != "$PROJECT_DIR" ]]; then
+    _parent_probe="$_project_parent/sandbox-parent-probe-$$"
+    _TEST_TEMP_FILES+=("$_parent_probe")
+    if sandbox bash -c "touch '$_parent_probe' 2>/dev/null && echo WROTE || echo BLOCKED"; then
+        if [[ "$OUTPUT" == "BLOCKED" ]]; then
+            pass "Project parent dir not writable from sandbox"
+        else
+            # tmpwrite-mode $HOME is an ephemeral tmpfs: if the project
+            # parent is under $HOME (e.g. $HOME/projects/foo), a write
+            # can "succeed" ephemerally without leaking to host. Only
+            # fail if the write actually reached the real host.
+            if [[ -f "$_parent_probe" ]]; then
+                fail "Sandbox wrote to project parent dir (host leak)" "$_parent_probe"
+                rm -f "$_parent_probe"
+            else
+                pass "Project parent dir write was ephemeral (tmpfs, not leaked)"
+            fi
+        fi
+    fi
+fi
+
 echo ""
 
 # ── 3. Environment variable blocking ────────────────────────────
