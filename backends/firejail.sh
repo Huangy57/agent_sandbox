@@ -281,9 +281,14 @@ backend_prepare() {
         fi
     done
 
-    # Make agent sandbox-config directories read-only inside the sandbox.
+    # Agent sandbox-config directories: whitelist so they are visible
+    # inside the sandbox regardless of HOME_WRITABLE, then mark
+    # read-only. The agent reads them via CLAUDE_CONFIG_DIR / CODEX_HOME
+    # / etc., so write access isn't needed here — overlay.sh does
+    # host-side merging before the sandbox starts.
     for _agent_dir in "${_AGENT_SANDBOX_CONFIG_DIRS[@]:-}"; do
         if [[ -n "$_agent_dir" && -d "$_agent_dir" ]]; then
+            FIREJAIL_ARGS+=(--whitelist="$_agent_dir")
             FIREJAIL_ARGS+=(--read-only="$_agent_dir")
         fi
     done

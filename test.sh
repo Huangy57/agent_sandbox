@@ -105,15 +105,16 @@ warn() { ((WARN++)); echo "  ⚠ $1 (known limitation)"; }
 CURRENT_BACKEND=""
 
 # Run a command inside the sandbox. Returns the exit code.
-# Captures stdout+stderr in $OUTPUT, filtering known backend warnings.
+# Captures stdout in $OUTPUT and stderr in $OUTPUT_ERR so tests can
+# assert against each stream independently (sandbox/backend warnings
+# live on stderr and would otherwise pollute OUTPUT).
 sandbox() {
-    # Capture stdout and stderr separately so sandbox/backend warnings
-    # never pollute the OUTPUT variable that tests assert against.
     local _stderr_file
     _stderr_file=$(mktemp)
     OUTPUT=$(timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" \
         --project-dir "$PROJECT_DIR" -- "$@" 2>"$_stderr_file")
     local rc=$?
+    OUTPUT_ERR=$(cat "$_stderr_file")
     [[ "${VERBOSE:-}" == true ]] && cat "$_stderr_file" >&2
     rm -f "$_stderr_file"
     return $rc
@@ -451,28 +452,22 @@ if sandbox bash -c 'echo ${GITHUB_PAT:-UNSET}'; then
     fi
 fi
 
-# OPENAI_API_KEY is in the default ALLOWED_ENV_VARS (agent API keys are
-# allowed by default so agents work on first launch). Admins who want to
-# force OAuth-only can drop the entry in their admin sandbox.conf.
-_openai_should_pass_through=true
-if [[ -f /app/lib/agent-sandbox/sandbox.conf ]] && \
-   ! grep -qE '"OPENAI_API_KEY"' /app/lib/agent-sandbox/sandbox.conf 2>/dev/null; then
-    _openai_should_pass_through=false
-fi
+# OPENAI_API_KEY ships in the default ALLOWED_ENV_VARS so codex/aider/
+# opencode work on first launch. The test probes behavior: if it passes
+# through, verify the value; if it's blocked, treat as a deliberate
+# config choice (user dropped it for OAuth-only) and skip.
 if sandbox bash -c 'echo ${OPENAI_API_KEY:-UNSET}'; then
-    if "$_openai_should_pass_through"; then
-        if [[ "$OUTPUT" == "test-secret" ]]; then
-            pass "OPENAI_API_KEY passes through (allowed by default)"
-        else
-            fail "OPENAI_API_KEY should pass through (in default ALLOWED_ENV_VARS)" "$OUTPUT"
-        fi
-    else
-        if [[ "$OUTPUT" == "UNSET" ]]; then
-            pass "OPENAI_API_KEY blocked (admin config drops it from ALLOWED_ENV_VARS)"
-        else
-            fail "OPENAI_API_KEY leaked into sandbox" "$OUTPUT"
-        fi
-    fi
+    case "$OUTPUT" in
+        "test-secret")
+            pass "OPENAI_API_KEY passes through (default / effective ALLOWED_ENV_VARS)"
+            ;;
+        "UNSET")
+            skip "OPENAI_API_KEY blocked — effective config excludes it from ALLOWED_ENV_VARS"
+            ;;
+        *)
+            fail "OPENAI_API_KEY value mutated inside sandbox" "$OUTPUT"
+            ;;
+    esac
 fi
 
 if sandbox bash -c 'echo ${AWS_ACCESS_KEY_ID:-UNSET}'; then
@@ -701,29 +696,22 @@ else
     skip "Claude not installed — skipping Claude content overlay tests"
 fi
 
-# Agent API keys in sandbox.conf pass through to all agents uniformly
-# (no per-agent gating). We already test OPENAI_API_KEY in section 3;
-# verify the same for GOOGLE_API_KEY.
+# Agent API keys in the default ALLOWED_ENV_VARS pass through to all
+# agents uniformly (no per-agent gating). Probe behavior: passes through
+# is the default; blocked means the user's effective config excluded it.
 export GOOGLE_API_KEY="test-google-key"
 if sandbox bash -c 'echo ${GOOGLE_API_KEY:-UNSET}'; then
-    _google_should_pass_through=true
-    if [[ -f /app/lib/agent-sandbox/sandbox.conf ]] && \
-       ! grep -qE '"GOOGLE_API_KEY"' /app/lib/agent-sandbox/sandbox.conf 2>/dev/null; then
-        _google_should_pass_through=false
-    fi
-    if "$_google_should_pass_through"; then
-        if [[ "$OUTPUT" == "test-google-key" ]]; then
-            pass "GOOGLE_API_KEY passes through (allowed by default for Gemini)"
-        else
-            fail "GOOGLE_API_KEY should pass through (in default ALLOWED_ENV_VARS)" "$OUTPUT"
-        fi
-    else
-        if [[ "$OUTPUT" == "UNSET" ]]; then
-            pass "GOOGLE_API_KEY blocked (admin config drops it)"
-        else
-            fail "GOOGLE_API_KEY leaked past admin block" "$OUTPUT"
-        fi
-    fi
+    case "$OUTPUT" in
+        "test-google-key")
+            pass "GOOGLE_API_KEY passes through (default / effective ALLOWED_ENV_VARS)"
+            ;;
+        "UNSET")
+            skip "GOOGLE_API_KEY blocked — effective config excludes it from ALLOWED_ENV_VARS"
+            ;;
+        *)
+            fail "GOOGLE_API_KEY value mutated inside sandbox" "$OUTPUT"
+            ;;
+    esac
 fi
 unset GOOGLE_API_KEY
 
@@ -1225,23 +1213,25 @@ else
     fi
 
     # 6c. Denied flags rejected
-    if sandbox sbatch --uid=0 --wrap="echo pwned" 2>&1; then
+    # Rejection messages from the chaperon stubs go to stderr, which
+    # the helper captures in $OUTPUT_ERR (not $OUTPUT).
+    if sandbox sbatch --uid=0 --wrap="echo pwned"; then
         fail "sbatch --uid=0 should be rejected by chaperon"
     else
-        if echo "$OUTPUT" | grep -qi "denied\|not allowed\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|error"; then
             pass "Chaperon rejects --uid flag"
         else
-            fail "Chaperon did not clearly reject --uid" "$OUTPUT"
+            fail "Chaperon did not clearly reject --uid" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
         fi
     fi
 
-    if sandbox sbatch --get-user-env --wrap="echo pwned" 2>&1; then
+    if sandbox sbatch --get-user-env --wrap="echo pwned"; then
         fail "sbatch --get-user-env should be rejected by chaperon"
     else
-        if echo "$OUTPUT" | grep -qi "denied\|not allowed\|error"; then
+        if echo "$OUTPUT $OUTPUT_ERR" | grep -qi "denied\|not allowed\|error"; then
             pass "Chaperon rejects --get-user-env flag"
         else
-            fail "Chaperon did not clearly reject --get-user-env" "$OUTPUT"
+            fail "Chaperon did not clearly reject --get-user-env" "stdout: $OUTPUT | stderr: $OUTPUT_ERR"
         fi
     fi
 

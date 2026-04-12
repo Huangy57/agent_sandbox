@@ -137,6 +137,16 @@ backend_prepare() {
         _is_blocked_by_pattern "$name" && { unset "$name" 2>/dev/null || true; } || true
     done < <(env)
 
+    # Agent sandbox-config directories: landlock has no mount namespace,
+    # so the real host path must be granted readable so the agent can
+    # read the merged CLAUDE.md / settings.json. Overlay.sh merges these
+    # host-side before the sandbox starts, so read-only suffices.
+    for _agent_dir in "${_AGENT_SANDBOX_CONFIG_DIRS[@]:-}"; do
+        if [[ -n "$_agent_dir" && -d "$_agent_dir" ]]; then
+            LANDLOCK_ARGS+=(--ro "$_agent_dir")
+        fi
+    done
+
     # Agent-specific environment exports (e.g., CLAUDE_CONFIG_DIR)
     for _agent_export in "${_AGENT_ENV_EXPORTS[@]}"; do
         export "$_agent_export"
