@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, packaging]
+    branches: [main, packaging, "ci/**"]
   pull_request:
     branches: [main]
 
@@ -120,8 +120,11 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
           sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
 
-      - name: Run quick test suite (bwrap)
-        run: bash test.sh --quick --backend bwrap
+      - name: Run full test suite (bwrap)
+        # Section 6 (chaperon functional tests, submits real Slurm jobs)
+        # auto-skips when sbatch is absent — clean on ubuntu-latest.
+        # For live Slurm coverage, see the test-bwrap-slurm job.
+        run: bash test.sh --backend bwrap
 
   # ── Sandbox tests (landlock) ────────────────────────────────────
   test-landlock:
@@ -140,9 +143,9 @@ jobs:
             echo "Landlock not available on this runner — skipping"
           fi
 
-      - name: Run quick test suite (landlock)
+      - name: Run full test suite (landlock)
         if: steps.landlock-check.outputs.available == 'true'
-        run: bash test.sh --quick --backend landlock
+        run: bash test.sh --backend landlock
 
   # ── Sandbox tests (firejail) ────────────────────────────────────
   test-firejail:
@@ -154,8 +157,57 @@ jobs:
       - name: Install firejail
         run: sudo apt-get update && sudo apt-get install -y firejail
 
-      - name: Run quick test suite (firejail)
-        run: bash test.sh --quick --backend firejail
+      - name: Run full test suite (firejail)
+        run: bash test.sh --backend firejail
+
+  # ── Live Slurm: chaperon functional tests (section 6) ───────────
+  # ubuntu-latest has no Slurm; this job stands up a single-node
+  # cluster via koesterlab/setup-slurm-action so test.sh section 6
+  # (sbatch/srun via chaperon) actually exercises a real slurmctld.
+  # The other backend jobs above run the same test.sh but section 6
+  # auto-skips when sbatch is missing.
+  test-bwrap-slurm:
+    name: "Sandbox tests (bwrap, with live Slurm)"
+    runs-on: ubuntu-latest
+    # slurmdbd requires a MySQL accounting backend; the setup-slurm
+    # action expects it at localhost:8888 per its ansible playbook.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 8888:3306
+        options: >-
+          --health-cmd "mysqladmin ping -proot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Enable unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+
+      - name: Set up SLURM (single-node, via ansible-slurm)
+        uses: koesterlab/setup-slurm-action@v1
+        with:
+          cpus: 2
+          memory: 4000
+
+      - name: Sanity-check Slurm is up
+        run: |
+          sinfo
+          srun --version
+          sbatch --wrap "echo hello-from-slurm" | grep -qE "Submitted batch job [0-9]+"
+
+      - name: Run full test suite (bwrap) with live Slurm
+        run: bash test.sh --backend bwrap
 
   # ── sandbox-exec.sh CLI behavior ────────────────────────────────
   cli:
