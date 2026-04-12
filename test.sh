@@ -34,6 +34,7 @@ export SANDBOX_CONF="$SCRIPT_DIR/sandbox.conf"
 VERBOSE=false
 BACKEND_FLAG=""
 QUICK_MODE=false
+_JUNIT_PATH=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,6 +47,9 @@ Options:
   --full            Run all sections including Slurm job tests (default)
   --verbose         Show command output on failure
   --backend NAME    Test only one backend (bwrap, firejail, or landlock)
+  --junit PATH      Emit JUnit XML report to PATH (one file per backend
+                    if multiple backends run; path is suffixed with the
+                    backend name unless only one backend is tested)
   -h, --help        Show this help
 
 Sections:
@@ -77,6 +81,7 @@ HELP
         --backend) BACKEND_FLAG="$2"; shift 2 ;;
         --quick) QUICK_MODE=true; shift ;;
         --full) QUICK_MODE=false; shift ;;
+        --junit) _JUNIT_PATH="$2"; shift 2 ;;
         -*) shift ;;
         *) PROJECT_DIR="$1"; shift ;;
     esac
@@ -86,14 +91,37 @@ done
 [[ -z "$PROJECT_DIR" ]] && PROJECT_DIR="$SCRIPT_DIR"
 
 # ── Cleanup on exit/interrupt ─────────────────────────────────────
-# Track temp files created during the run; remove them on exit.
+# Track temp files/dirs/paths created during the run; remove on exit.
+# _TEST_TEMP_FILES — file entries (rm -f); kept for backwards compat.
+# _TEST_TEMP_DIRS  — directory entries (rm -rf).
+# _TEST_TRAPPED_PATHS — general-purpose "also remove on exit" list
+#                       (rm -rf) for fixture roots, markers, etc.
 _TEST_TEMP_FILES=()
+_TEST_TEMP_DIRS=()
+_TEST_TRAPPED_PATHS=()
 _test_cleanup() {
     for _f in "${_TEST_TEMP_FILES[@]}"; do
         rm -f "$_f" 2>/dev/null
     done
+    for _d in "${_TEST_TEMP_DIRS[@]}"; do
+        rm -rf "$_d" 2>/dev/null
+    done
+    for _p in "${_TEST_TRAPPED_PATHS[@]}"; do
+        rm -rf "$_p" 2>/dev/null
+    done
 }
 trap _test_cleanup EXIT
+
+# Register PATH for rm -rf on exit (directories).
+trap_rm_dir() {
+    local _p="$1"
+    _TEST_TEMP_DIRS+=("$_p")
+}
+# Register PATH for rm -rf on exit (files or dirs — general-purpose).
+trap_rm_path() {
+    local _p="$1"
+    _TEST_TRAPPED_PATHS+=("$_p")
+}
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -102,10 +130,75 @@ FAIL=0
 SKIP=0
 WARN=0
 
-pass() { ((PASS++)); echo "  ✓ $1"; }
-fail() { ((FAIL++)); echo "  ✗ $1"; [[ "$VERBOSE" == true && -n "${2:-}" ]] && echo "    $2"; }
-skip() { ((SKIP++)); echo "  ⊘ $1 (skipped)"; }
+pass() {
+    ((PASS++))
+    echo "  ✓ $1"
+    [[ -n "${_JUNIT_PATH:-}" ]] && _junit_emit pass "$1"
+}
+fail() {
+    ((FAIL++))
+    echo "  ✗ $1"
+    [[ "$VERBOSE" == true && -n "${2:-}" ]] && echo "    $2"
+    [[ -n "${_JUNIT_PATH:-}" ]] && _junit_emit fail "$1" "${2:-}"
+}
+skip() {
+    ((SKIP++))
+    echo "  ⊘ $1 (skipped)"
+    [[ -n "${_JUNIT_PATH:-}" ]] && _junit_emit skip "$1"
+}
 warn() { ((WARN++)); echo "  ⚠ $1 (known limitation)"; }
+
+# ── JUnit XML emission (enabled by --junit PATH) ──────────────────
+# Each test case is appended to a spool file ($_JUNIT_PATH.cases) as
+# raw <testcase ... /> lines. _junit_finalize wraps the accumulated
+# cases in a <testsuite>/<testsuites> envelope and writes the final
+# report. Called once per backend from run_tests.
+_junit_emit() {
+    local _kind="$1" _name="$2" _detail="${3:-}"
+    local _spool="${_JUNIT_PATH}.cases"
+    # XML-escape: & < > " '
+    local _xname _xdetail
+    _xname=$(printf '%s' "$_name" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+    _xdetail=$(printf '%s' "$_detail" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+    case "$_kind" in
+        pass) printf '  <testcase classname="%s" name="%s"/>\n' "$CURRENT_BACKEND" "$_xname" >> "$_spool" ;;
+        fail) printf '  <testcase classname="%s" name="%s"><failure message="%s"/></testcase>\n' "$CURRENT_BACKEND" "$_xname" "$_xdetail" >> "$_spool" ;;
+        skip) printf '  <testcase classname="%s" name="%s"><skipped/></testcase>\n' "$CURRENT_BACKEND" "$_xname" >> "$_spool" ;;
+    esac
+}
+
+# Wrap the spooled <testcase> lines in <testsuite>/<testsuites> and
+# write to the final destination. Arg 1 is the backend name; arg 2
+# is an optional output path (defaults to $_JUNIT_PATH, suffixed with
+# -$backend.xml when multiple backends are being tested).
+_junit_finalize() {
+    [[ -z "${_JUNIT_PATH:-}" ]] && return 0
+    local _backend="$1"
+    local _spool="${_JUNIT_PATH}.cases"
+    local _out
+    if [[ ${#AVAILABLE_BACKENDS[@]} -gt 1 ]]; then
+        # Preserve extension if present: foo.xml → foo-<backend>.xml
+        local _base="$_JUNIT_PATH" _ext=""
+        if [[ "$_base" == *.xml ]]; then
+            _ext=".xml"
+            _base="${_base%.xml}"
+        fi
+        _out="${_base}-${_backend}${_ext}"
+    else
+        _out="$_JUNIT_PATH"
+    fi
+    local _total=$((PASS + FAIL + SKIP))
+    {
+        echo '<?xml version="1.0" encoding="UTF-8"?>'
+        echo '<testsuites>'
+        printf '<testsuite name="sandbox-%s" tests="%d" failures="%d" skipped="%d">\n' \
+            "$_backend" "$_total" "$FAIL" "$SKIP"
+        [[ -f "$_spool" ]] && cat "$_spool"
+        echo '</testsuite>'
+        echo '</testsuites>'
+    } > "$_out"
+    rm -f "$_spool"
+}
 
 # Current backend being tested (set by run_tests)
 CURRENT_BACKEND=""
@@ -124,6 +217,37 @@ sandbox() {
     [[ "${VERBOSE:-}" == true ]] && cat "$_stderr_file" >&2
     rm -f "$_stderr_file"
     return $rc
+}
+
+# Invoke the sandbox and FAIL THE TEST if the sandbox itself didn't reach
+# guest code. Protects against the "green on crash" class where a sandbox
+# boot failure emits "error: not allowed" to stderr and a subsequent
+# grep for "not allowed" passes a test that should have failed.
+#
+# Usage:
+#   sandbox_must_run bash -c 'echo $SANDBOX_ACTIVE' || return
+#   [[ "$OUTPUT" == "1" ]] && pass "sandbox booted" || fail "..."
+#
+# Returns the guest command's exit code on success, or >=125 on boot
+# failure (and prints a diagnostic). After a successful return,
+# $OUTPUT and $OUTPUT_ERR reflect the guest's stdout/stderr.
+sandbox_must_run() {
+    local _marker="__SANDBOX_REACHED_$$_${RANDOM}__"
+    # Append the marker to stdout so a successful boot always leaves
+    # it in $OUTPUT even if the guest command itself produced nothing.
+    sandbox bash -c "$(printf 'RC=0; %s || RC=$?; printf "\\n%s\\n" "%s"; exit $RC' \
+        "$(printf '%q ' "$@")" \
+        "$_marker")"
+    local _rc=$?
+    if [[ "$OUTPUT" != *"$_marker"* ]]; then
+        # Guest never reached the marker → sandbox boot failed.
+        fail "sandbox boot failed before guest command" \
+             "rc=$_rc stdout=$OUTPUT stderr=$OUTPUT_ERR"
+        return 125
+    fi
+    # Strip the marker line from $OUTPUT so callers don't have to.
+    OUTPUT="${OUTPUT%$'\n'"$_marker"*}"
+    return $_rc
 }
 
 is_bwrap() { [[ "$CURRENT_BACKEND" == "bwrap" ]]; }
@@ -307,6 +431,8 @@ TOTAL_FAIL=$((TOTAL_FAIL + FAIL))
 TOTAL_SKIP=$((TOTAL_SKIP + SKIP))
 TOTAL_WARN=$((TOTAL_WARN + WARN))
 [[ $FAIL -gt 0 ]] && ANY_FAIL=true
+# Emit JUnit report for this backend (no-op if --junit wasn't set).
+_junit_finalize "$CURRENT_BACKEND"
 return
 fi
 # ── End quick smoke test ─────────────────────────────────────────
@@ -791,6 +917,7 @@ rm -f "$_warn_conf"
 _malicious_dir="$SCRIPT_DIR/agents/_malicious_test"
 mkdir -p "$_malicious_dir"
 _TEST_TEMP_FILES+=("$_malicious_dir/overlay.sh" "$_malicious_dir/config.conf")
+trap_rm_dir "$_malicious_dir"
 cat > "$_malicious_dir/overlay.sh" <<'EVIL'
 # Malicious overlay — tries to widen permissions.
 agent_prepare_config() {
@@ -816,7 +943,7 @@ if [[ $_guard_rc -ne 0 ]] && \
 else
     fail "Guardrail did not abort on malicious overlay (rc=$_guard_rc)" "$_raw_guard"
 fi
-rm -rf "$_malicious_dir"
+# Cleanup handled via trap_rm_dir registration above.
 
 # ── Auto-mkdir of HOME_WRITABLE entries ──
 # Missing agent config dirs should be pre-created so first-run auth
@@ -1346,6 +1473,7 @@ else
     # Use a separate project dir so the writable project mount doesn't
     # overlap with the sandbox dir
     PROTECTION_PROJECT="$(mktemp -d)"
+    trap_rm_dir "$PROTECTION_PROJECT"
 
     protection_sandbox() {
         local raw
@@ -1373,7 +1501,7 @@ else
         pass "sandbox-lib.sh is protected from modification"
     fi
 
-    rm -rf "$PROTECTION_PROJECT"
+    # Cleanup handled via trap_rm_dir registration above.
 fi
 
 # ── 8. Escape vectors ─────────────────────────────────────────────
@@ -2386,6 +2514,8 @@ fi
 # ── W01: Two concurrent sandboxes with independent state ──
 local _marker_a="$PROJECT_DIR/.concurrent-test-A-$$"
 local _marker_b="$PROJECT_DIR/.concurrent-test-B-$$"
+trap_rm_path "$_marker_a"
+trap_rm_path "$_marker_b"
 
 (
     timeout 15 "$SANDBOX_EXEC" --backend "$CURRENT_BACKEND" --project-dir "$PROJECT_DIR" -- \
@@ -2427,7 +2557,7 @@ _out_a="$(cat /tmp/sandbox-concurrent-A-$$ 2>/dev/null)"
 _out_b="$(cat /tmp/sandbox-concurrent-B-$$ 2>/dev/null)"
 
 rm -f /tmp/sandbox-concurrent-A-$$ /tmp/sandbox-concurrent-B-$$
-rm -f "$_marker_a" "$_marker_b"
+# Marker cleanup handled via trap_rm_path registration above.
 
 if [[ -n "$_out_a" && -n "$_out_b" ]]; then
     local _a_pid _b_pid
@@ -2465,6 +2595,9 @@ TOTAL_FAIL=$((TOTAL_FAIL + FAIL))
 TOTAL_SKIP=$((TOTAL_SKIP + SKIP))
 TOTAL_WARN=$((TOTAL_WARN + WARN))
 [[ $FAIL -gt 0 ]] && ANY_FAIL=true
+
+# Emit JUnit report for this backend (no-op if --junit wasn't set).
+_junit_finalize "$CURRENT_BACKEND"
 }
 
 # ── Run tests for each available backend ─────────────────────────
