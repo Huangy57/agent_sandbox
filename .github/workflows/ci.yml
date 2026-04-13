@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, packaging, "ci/**"]
+    branches: [main, packaging, "ci/**", "feat/**"]
     paths-ignore: ['**.md', 'CHANGELOG.md', 'docs/**', 'LICENSE']
   pull_request:
     branches: [main]
@@ -18,7 +18,7 @@ jobs:
     name: "Smoke (bash -n + shellcheck)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Bash syntax check
         run: bash -n sandbox-exec.sh sandbox-lib.sh test.sh chaperon/chaperon.sh backends/bwrap.sh backends/firejail.sh backends/landlock.sh
@@ -50,7 +50,7 @@ jobs:
           - prefix: "/usr/local"
             label: "system-wide"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install bubblewrap
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
@@ -122,7 +122,7 @@ jobs:
     name: "DESTDIR packaging test"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: make install with DESTDIR
         run: make install DESTDIR=/tmp/pkg PREFIX=/usr
@@ -141,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: smoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-sandbox-host
 
@@ -161,7 +161,69 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-logs-${{ github.job }}
+          path: |
+            /tmp/chaperon-*
+            /tmp/agent-sandbox-test-*
+          if-no-files-found: ignore
+
+  # ── Lmod module loading (bwrap) ─────────────────────────────────
+  # Installs lmod, creates a dummy module that prepends a marker
+  # directory to PATH, then runs the test suite with SANDBOX_TEST_LMOD=1
+  # so section 13 exercises SANDBOX_MODULES end-to-end.
+  test-lmod:
+    name: "Lmod module loading (bwrap)"
+    runs-on: ubuntu-latest
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/setup-sandbox-host
+
+      - name: Install lmod
+        run: |
+          sudo apt-get install -y lmod
+          # Source lmod init so `module` is available in subsequent steps
+          echo "BASH_ENV=/etc/profile.d/lmod.sh" >> "$GITHUB_ENV"
+
+      - name: Create dummy test module
+        run: |
+          # Create a modulefiles tree with a dummy module that prepends
+          # a marker directory to PATH. This lets the test verify that
+          # SANDBOX_MODULES actually loaded the module.
+          MODROOT="$HOME/test-modulefiles"
+          mkdir -p "$MODROOT/sandbox-test-marker"
+          MARKER_DIR="$HOME/.sandbox-test-bin"
+          mkdir -p "$MARKER_DIR"
+
+          cat > "$MODROOT/sandbox-test-marker/1.0.lua" <<'LUA'
+          help([[Dummy module for sandbox lmod CI test]])
+          prepend_path("PATH", os.getenv("HOME") .. "/.sandbox-test-bin")
+          LUA
+
+          # Register the modulefile tree with lmod
+          module use "$MODROOT"
+          # Verify the module is loadable
+          module avail sandbox-test-marker 2>&1 | grep -q sandbox-test-marker
+          module load sandbox-test-marker/1.0
+          echo "$PATH" | grep -q ".sandbox-test-bin"
+          module unload sandbox-test-marker/1.0
+          echo "Dummy module verified"
+
+          # Export for test.sh
+          echo "MODULEPATH=$MODROOT:${MODULEPATH:-}" >> "$GITHUB_ENV"
+          echo "SANDBOX_TEST_LMOD=1" >> "$GITHUB_ENV"
+          echo "SANDBOX_TEST_MODULE_NAME=sandbox-test-marker/1.0" >> "$GITHUB_ENV"
+          echo "SANDBOX_TEST_MODULE_PATH=$MARKER_DIR" >> "$GITHUB_ENV"
+
+      - name: Run test suite with lmod (bwrap)
+        run: bash test.sh --backend bwrap --verbose
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ github.job }}
           path: |
@@ -175,7 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: smoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-sandbox-host
 
@@ -194,7 +256,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ github.job }}
           path: |
@@ -208,7 +270,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: smoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-sandbox-host
 
@@ -226,7 +288,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ github.job }}
           path: |
@@ -263,7 +325,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-sandbox-host
 
@@ -302,7 +364,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ github.job }}
           path: |
@@ -315,7 +377,7 @@ jobs:
     name: "CLI behavior tests"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-sandbox-host
 
@@ -365,10 +427,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: smoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
 
       - uses: ./.github/actions/setup-sandbox-host
 

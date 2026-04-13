@@ -15,7 +15,7 @@
 # sandbox boot, filesystem isolation, credential blocking, project
 # write, and chaperon proxy.  Completes in seconds.  No Slurm jobs.
 #
-# The full test (default) runs all 12 sections including chaperon
+# The full test (default) runs all 13 sections including chaperon
 # functional tests (submits real Slurm jobs), escape vectors, syscall
 # restrictions, resource isolation, credential protection, and more.
 
@@ -66,6 +66,7 @@ Sections:
  10. Credential protection
  11. Sandbox self-protection
  12. Stability / stress tests
+ 13. Lmod module loading (requires lmod + SANDBOX_TEST_LMOD=1)
 
 The quick test (--quick) is safe to run anywhere — it never submits
 Slurm jobs or modifies state outside the sandbox.
@@ -438,7 +439,7 @@ fi
 # ── End quick smoke test ─────────────────────────────────────────
 
 # ══════════════════════════════════════════════════════════════════
-# Full test suite (sections 1–12)
+# Full test suite (sections 1–13)
 # ══════════════════════════════════════════════════════════════════
 
 # ── 1. Basic sandbox ─────────────────────────────────────────────
@@ -476,6 +477,18 @@ if sandbox bash -c 'echo $SANDBOX_BACKEND'; then
         pass "SANDBOX_BACKEND=$CURRENT_BACKEND"
     else
         fail "SANDBOX_BACKEND wrong: $OUTPUT (expected $CURRENT_BACKEND)"
+    fi
+fi
+
+# ── Config loading sanity ────────────────────────────────────────
+# The repo's sandbox.conf skeleton must load without triggering
+# "exited with code" warnings. Catches missing default initializations
+# for variables listed in _CONFIG_ARRAYS / _CONFIG_SCALARS.
+if sandbox bash -c 'echo ok'; then
+    if [[ "$OUTPUT_ERR" == *"exited with code"* ]]; then
+        fail "Config loading produced warnings" "$OUTPUT_ERR"
+    else
+        pass "Config loads cleanly (no warnings)"
     fi
 fi
 
@@ -3563,6 +3576,97 @@ else
 fi
 
 echo ""
+
+# ── 13. Lmod module loading ────────────────────────────────────────
+#
+# These tests require lmod installed and SANDBOX_TEST_LMOD=1 set.
+# The CI lmod job sets up a dummy module that exports a marker env var,
+# then verifies the sandbox loads it before backend detection.
+
+if [[ "${SANDBOX_TEST_LMOD:-}" == "1" ]] && type module &>/dev/null; then
+
+echo "13. Lmod module loading"
+
+# Helper: create a temp config that sources the base sandbox.conf then
+# appends test-specific overrides.
+_lmod_test_conf() {
+    local _conf
+    _conf=$(mktemp)
+    trap_rm_path "$_conf"
+    # Start from the base config so READONLY_MOUNTS, ALLOWED_PROJECT_PARENTS etc. are set
+    cat "$SCRIPT_DIR/sandbox.conf" > "$_conf"
+    # Append test-specific lines
+    cat >> "$_conf"
+    echo "$_conf"
+}
+
+# ── L01: SANDBOX_MODULES loads module and updates PATH ──
+# The CI job creates a dummy module "sandbox-test-marker" that prepends
+# a known directory to PATH.  If module loading works, that dir appears
+# in PATH inside the sandbox.
+if [[ -n "${SANDBOX_TEST_MODULE_NAME:-}" ]]; then
+    local _lmod_conf
+    _lmod_conf=$(_lmod_test_conf <<CONF
+SANDBOX_MODULES=("${SANDBOX_TEST_MODULE_NAME}")
+CONF
+    )
+    if SANDBOX_CONF="$_lmod_conf" sandbox_must_run bash -c 'echo "$PATH"'; then
+        if [[ "$OUTPUT" == *"${SANDBOX_TEST_MODULE_PATH:-__UNSET__}"* ]]; then
+            pass "L01: SANDBOX_MODULES loaded module, PATH contains module-provided directory"
+        else
+            fail "L01: Module loaded but PATH missing expected directory" \
+                 "expected substring: ${SANDBOX_TEST_MODULE_PATH:-__UNSET__} in: $OUTPUT"
+        fi
+    fi
+else
+    skip "L01: SANDBOX_TEST_MODULE_NAME not set"
+fi
+
+# ── L02: Empty SANDBOX_MODULES is a no-op ──
+local _empty_conf
+_empty_conf=$(_lmod_test_conf <<CONF
+SANDBOX_MODULES=()
+CONF
+)
+if SANDBOX_CONF="$_empty_conf" sandbox_must_run bash -c 'echo ok'; then
+    if [[ "$OUTPUT" == *"ok"* ]]; then
+        pass "L02: Empty SANDBOX_MODULES is a no-op"
+    else
+        fail "L02: Sandbox with empty SANDBOX_MODULES didn't run guest" "$OUTPUT"
+    fi
+fi
+
+# ── L03: Bad module name warns but doesn't abort ──
+local _bad_conf
+_bad_conf=$(_lmod_test_conf <<CONF
+SANDBOX_MODULES=("nonexistent-module/99.99.99")
+CONF
+)
+if SANDBOX_CONF="$_bad_conf" sandbox bash -c 'echo ok'; then
+    if [[ "$OUTPUT" == *"ok"* ]]; then
+        if [[ "$OUTPUT_ERR" == *"warning"*"nonexistent-module"* ]]; then
+            pass "L03: Bad module name warns on stderr but sandbox still runs"
+        else
+            pass "L03: Bad module name doesn't abort sandbox (warning may be suppressed)"
+        fi
+    else
+        fail "L03: Sandbox failed to run with bad module name" "$OUTPUT $OUTPUT_ERR"
+    fi
+else
+    # Sandbox may still produce output even with non-zero exit
+    if [[ "$OUTPUT" == *"ok"* ]]; then
+        pass "L03: Bad module name doesn't prevent guest execution"
+    else
+        fail "L03: Bad module name prevented sandbox from starting" "$OUTPUT_ERR"
+    fi
+fi
+
+echo ""
+
+else
+    echo "13. Lmod module loading — skipped (SANDBOX_TEST_LMOD!=1 or module not available)"
+    echo ""
+fi
 
 # ── Per-backend summary ──────────────────────────────────────────
 
