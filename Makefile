@@ -108,11 +108,14 @@ install-lib:
 	$(INSTALL) -d $(DESTDIR)$(LIBDIR)/chaperon/stubs
 	$(INSTALL) -m 755 $(SRC_DIR)/chaperon/chaperon.sh $(DESTDIR)$(LIBDIR)/chaperon/
 	$(INSTALL) -m 644 $(SRC_DIR)/chaperon/protocol.sh $(DESTDIR)$(LIBDIR)/chaperon/
-	for f in $(SRC_DIR)/chaperon/handlers/*.sh; do $(INSTALL) -m 644 "$$f" $(DESTDIR)$(LIBDIR)/chaperon/handlers/; done
-	chmod +x $(DESTDIR)$(LIBDIR)/chaperon/handlers/*.sh
-	chmod -x $(DESTDIR)$(LIBDIR)/chaperon/handlers/_handler_lib.sh
-	for f in $(SRC_DIR)/chaperon/stubs/*; do $(INSTALL) -m 755 "$$f" $(DESTDIR)$(LIBDIR)/chaperon/stubs/; done
-	chmod -x $(DESTDIR)$(LIBDIR)/chaperon/stubs/_stub_lib.sh
+	@# Handler scripts (executable) and shared library (sourced, not executable)
+	for f in $(SRC_DIR)/chaperon/handlers/*.sh; do \
+		case "$$f" in *_handler_lib.sh) $(INSTALL) -m 644 "$$f" $(DESTDIR)$(LIBDIR)/chaperon/handlers/ ;; \
+		*) $(INSTALL) -m 755 "$$f" $(DESTDIR)$(LIBDIR)/chaperon/handlers/ ;; esac; done
+	@# Stub scripts (executable) and shared library (sourced, not executable)
+	for f in $(SRC_DIR)/chaperon/stubs/*; do \
+		case "$$f" in *_stub_lib.sh) $(INSTALL) -m 644 "$$f" $(DESTDIR)$(LIBDIR)/chaperon/stubs/ ;; \
+		*) $(INSTALL) -m 755 "$$f" $(DESTDIR)$(LIBDIR)/chaperon/stubs/ ;; esac; done
 	@# Config templates.
 	@# sandbox.conf.template: always used as the source for user auto-init,
 	@#   even if an admin replaces sandbox.conf with the admin skeleton.
