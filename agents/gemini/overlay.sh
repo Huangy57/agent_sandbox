@@ -21,7 +21,7 @@ agent_prepare_config() {
     mkdir -p "$config_dir"
 
     # --- Merge GEMINI.md ---
-    local sandbox_snippet="$SANDBOX_DIR/agents/gemini/agent.md"
+    local sandbox_snippet="$(_agent_file gemini agent.md)"
     local user_gemini_md="$real_gemini_dir/GEMINI.md"
     {
         if [[ -f "$user_gemini_md" ]]; then

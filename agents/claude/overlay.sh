@@ -25,7 +25,7 @@ agent_prepare_config() {
     mkdir -p "$config_dir"
 
     # --- Merge CLAUDE.md ---
-    local sandbox_snippet="$SANDBOX_DIR/agents/claude/agent.md"
+    local sandbox_snippet="$(_agent_file claude agent.md)"
     local user_claude_md="$real_claude_dir/CLAUDE.md"
     {
         if [[ -f "$user_claude_md" ]]; then
@@ -44,7 +44,7 @@ agent_prepare_config() {
     fi
 
     # --- Merge settings.json ---
-    local sandbox_settings="$SANDBOX_DIR/agents/claude/settings.json"
+    local sandbox_settings="$(_agent_file claude settings.json)"
     local user_settings="$real_claude_dir/settings.json"
 
     if [[ -f "$sandbox_settings" ]]; then

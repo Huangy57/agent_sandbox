@@ -1032,6 +1032,72 @@ _AGENT_PROTECTED_FILES=()
 
 # ── Helpers ────────────────────────────────────────────────────────
 
+# _agent_file AGENT_NAME FILENAME — resolve a user-customizable agent
+# file (agent.md, settings.json). Returns the user copy if it exists
+# in ~/.config/agent-sandbox/agents/<name>/, otherwise the install-dir
+# default. Called by overlay.sh scripts to find instruction/settings
+# templates.
+_agent_file() {
+    local _name="$1" _file="$2"
+    local _user_path="$_USER_DATA_DIR/agents/$_name/$_file"
+    local _default_path="$SANDBOX_DIR/agents/$_name/$_file"
+    if [[ -f "$_user_path" ]]; then
+        echo "$_user_path"
+    else
+        echo "$_default_path"
+    fi
+}
+
+# _deploy_agent_files — copy user-customizable agent files (agent.md,
+# settings.json) from the install dir to the user config dir. Skips
+# files the user has modified (detected via .origin-sha256 sidecar).
+# Overwrites unmodified copies so upgrades propagate automatically.
+# Called once per sandbox start from prepare_agent_configs.
+_deploy_agent_files() {
+    local agents_dir="$SANDBOX_DIR/agents"
+    [[ -d "$agents_dir" ]] || return 0
+
+    local agent_dir agent_name src dest dest_dir sha_file
+    for agent_dir in "$agents_dir"/*/; do
+        [[ -d "$agent_dir" ]] || continue
+        agent_name="$(basename "$agent_dir")"
+        dest_dir="$_USER_DATA_DIR/agents/$agent_name"
+
+        for src in "$agent_dir"agent.md "$agent_dir"settings.json; do
+            [[ -f "$src" ]] || continue
+            local fname
+            fname="$(basename "$src")"
+            dest="$dest_dir/$fname"
+            sha_file="$dest_dir/.$fname.origin-sha256"
+
+            local src_sha
+            src_sha="$(sha256sum "$src" | cut -d' ' -f1)"
+
+            if [[ -f "$dest" ]]; then
+                if [[ -f "$sha_file" ]]; then
+                    local origin_sha
+                    origin_sha="$(cat "$sha_file" 2>/dev/null)"
+                    local dest_sha
+                    dest_sha="$(sha256sum "$dest" | cut -d' ' -f1)"
+                    if [[ "$dest_sha" == "$origin_sha" ]]; then
+                        # User hasn't modified — safe to overwrite
+                        mkdir -p "$dest_dir"
+                        cp "$src" "$dest"
+                        echo "$src_sha" > "$sha_file"
+                    fi
+                    # else: user modified, skip
+                fi
+                # No sidecar = pre-existing user file, don't touch
+            else
+                # First deploy
+                mkdir -p "$dest_dir"
+                cp "$src" "$dest"
+                echo "$src_sha" > "$sha_file"
+            fi
+        done
+    done
+}
+
 # _agent_warnings_suppressed NAME — return 0 if warnings for this agent
 # should be silenced (SUPPRESS_AGENT_WARNINGS contains "all" or NAME).
 _agent_warnings_suppressed() {
@@ -1271,6 +1337,11 @@ prepare_agent_configs() {
     # Pre-create missing HOME_WRITABLE entries so overlays see the real
     # config dirs (for symlinking) and first-time auth writes persist.
     _ensure_writable_home_dirs
+
+    # Deploy user-customizable agent files (agent.md, settings.json)
+    # to ~/.config/agent-sandbox/agents/. Overwrites unmodified copies
+    # on upgrade; preserves user edits.
+    _deploy_agent_files
 
     local agent_dir agent_name overlay
     for agent_dir in "$agents_dir"/*/; do

@@ -12,7 +12,7 @@ agent_prepare_config() {
 
     # Inject sandbox instructions via AIDER_READ env var.
     # If the user already has AIDER_READ set, append our snippet.
-    local sandbox_snippet="$SANDBOX_DIR/agents/aider/agent.md"
+    local sandbox_snippet="$(_agent_file aider agent.md)"
     if [[ -f "$sandbox_snippet" ]]; then
         if [[ -n "${AIDER_READ:-}" ]]; then
             _AGENT_ENV_EXPORTS+=("AIDER_READ=${AIDER_READ} ${sandbox_snippet}")

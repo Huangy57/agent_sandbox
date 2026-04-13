@@ -22,7 +22,7 @@ agent_prepare_config() {
     mkdir -p "$config_dir"
 
     # --- Merge AGENTS.md ---
-    local sandbox_snippet="$SANDBOX_DIR/agents/opencode/agent.md"
+    local sandbox_snippet="$(_agent_file opencode agent.md)"
     local user_agents_md="$real_opencode_dir/AGENTS.md"
     {
         if [[ -f "$user_agents_md" ]]; then

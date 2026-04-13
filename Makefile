@@ -16,8 +16,10 @@ LIBDIR   := $(PREFIX)/lib/agent-sandbox
 BINDIR   := $(PREFIX)/bin
 DOCDIR   := $(PREFIX)/share/doc/agent-sandbox
 CONFDIR  ?= $(HOME)/.config/agent-sandbox
+FORCE    ?= 0
 
 INSTALL  := install
+SHA256   := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
 SRC_DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 VERSION  := $(shell cat $(SRC_DIR)/VERSION 2>/dev/null || echo 0.0.0)
@@ -50,7 +52,7 @@ all:
 	@echo ""
 	@echo "Targets:"
 	@echo "  make install          Install to PREFIX=$(PREFIX)"
-	@echo "  make install-conf     Create default sandbox.conf (won't overwrite)"
+	@echo "  make install-conf     Deploy sandbox.conf + agent templates (preserves edits)"
 	@echo "  make uninstall        Remove installed files"
 	@echo "  make check            Run the test suite"
 	@echo "  make version          Print version"
@@ -68,7 +70,7 @@ install: install-lib install-bin install-docs
 	@echo "  Docs:    $(DESTDIR)$(DOCDIR)/"
 	@echo ""
 	@echo "Next steps:"
-	@echo "  make install-conf     Create ~/.config/agent-sandbox/sandbox.conf"
+	@echo "  make install-conf     Create sandbox.conf + deploy agent templates"
 	@echo "  agent-sandbox -- claude"
 
 install-lib:
@@ -140,6 +142,37 @@ install-conf:
 			$(INSTALL) -m 644 "$$f" "$(CONFDIR)/conf.d/$$name"; \
 		fi; \
 	done || true
+	@# Deploy agent template files (agent.md, settings.json).
+	@# Overwrites unmodified copies; preserves user edits (via .origin-sha256).
+	@# Use FORCE=1 to overwrite regardless: make install-conf FORCE=1
+	@for agent_dir in $(SRC_DIR)/agents/*/; do \
+		agent=$$(basename "$$agent_dir"); \
+		for f in $$agent_dir/agent.md $$agent_dir/settings.json; do \
+			[ -f "$$f" ] || continue; \
+			fname=$$(basename "$$f"); \
+			dest="$(CONFDIR)/agents/$$agent/$$fname"; \
+			sha_file="$(CONFDIR)/agents/$$agent/.$$fname.origin-sha256"; \
+			src_sha=$$($(SHA256) "$$f" | cut -d' ' -f1); \
+			$(INSTALL) -d "$(CONFDIR)/agents/$$agent"; \
+			if [ "$(FORCE)" = "1" ] || [ ! -f "$$dest" ]; then \
+				$(INSTALL) -m 644 "$$f" "$$dest"; \
+				echo "$$src_sha" > "$$sha_file"; \
+				echo "  Deployed agents/$$agent/$$fname"; \
+			elif [ -f "$$sha_file" ]; then \
+				dest_sha=$$($(SHA256) "$$dest" | cut -d' ' -f1); \
+				origin_sha=$$(cat "$$sha_file"); \
+				if [ "$$dest_sha" = "$$origin_sha" ]; then \
+					$(INSTALL) -m 644 "$$f" "$$dest"; \
+					echo "$$src_sha" > "$$sha_file"; \
+					echo "  Updated agents/$$agent/$$fname"; \
+				else \
+					echo "  Skipped agents/$$agent/$$fname (user modified)"; \
+				fi; \
+			else \
+				echo "  Skipped agents/$$agent/$$fname (user file, no origin hash)"; \
+			fi; \
+		done; \
+	done
 
 install-docs:
 	$(INSTALL) -d $(DESTDIR)$(DOCDIR)
