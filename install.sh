@@ -86,6 +86,14 @@ if command -v bwrap &>/dev/null; then
         echo "⚠ bubblewrap ${_bwrap_ver} is too old (need ≥ 0.4.0 for --chmod, --unsetenv)"
         echo "  Install a newer version: https://github.com/containers/bubblewrap/releases"
         echo "  Or use Homebrew: brew install bubblewrap"
+        # Check if a newer bwrap is available via lmod
+        if type module &>/dev/null; then
+            _spider_out=$(module spider bubblewrap 2>&1 || true)
+            _lmod_match=$(echo "$_spider_out" | grep -oP 'bubblewrap/\S+' | sort -V | tail -1)
+            if [[ -n "$_lmod_match" ]]; then
+                echo "  Or use lmod — add to sandbox.conf: SANDBOX_MODULES=(\"$_lmod_match\")"
+            fi
+        fi
     elif bwrap --ro-bind / / true 2>/dev/null; then
         AVAILABLE_BACKENDS+=(bwrap)
         echo "✓ bubblewrap available: $(bwrap --version)"
@@ -116,11 +124,36 @@ if command -v bwrap &>/dev/null; then
 else
     echo "· bubblewrap not found"
     echo "  bwrap provides the strongest sandbox (mount namespace, PID namespace)."
-    echo "  Install options:"
-    echo "    System-wide (recommended):  sudo apt install bubblewrap"
-    echo "    User-local (no root):       brew install bubblewrap"
-    echo "    From source:                https://github.com/containers/bubblewrap"
-    echo ""
+
+    # Check if a suitable bwrap module is available via lmod
+    _lmod_suggestion=""
+    if type module &>/dev/null; then
+        # module spider outputs to stderr; search for bubblewrap modules
+        _spider_out=$(module spider bubblewrap 2>&1 || true)
+        # Extract the most recent version line, e.g. "bubblewrap/0.11.1-GCCcore-12.3.0"
+        _lmod_match=$(echo "$_spider_out" | grep -oP 'bubblewrap/\S+' | sort -V | tail -1)
+        if [[ -n "$_lmod_match" ]]; then
+            _lmod_suggestion="$_lmod_match"
+        fi
+    fi
+
+    if [[ -n "$_lmod_suggestion" ]]; then
+        echo ""
+        echo "  Found via lmod: $_lmod_suggestion"
+        echo "  Add this to your sandbox.conf after installation:"
+        echo "    SANDBOX_MODULES=(\"$_lmod_suggestion\")"
+        echo ""
+    else
+        echo "  Install options:"
+        echo "    System-wide (recommended):  sudo apt install bubblewrap"
+        echo "    User-local (no root):       brew install bubblewrap"
+        echo "    From source:                https://github.com/containers/bubblewrap"
+        if type module &>/dev/null; then
+            echo "    Via lmod:                   module load bubblewrap/<version>"
+            echo "                                then set SANDBOX_MODULES in sandbox.conf"
+        fi
+        echo ""
+    fi
 fi
 
 # Check firejail
@@ -160,6 +193,12 @@ if [[ ${#AVAILABLE_BACKENDS[@]} -eq 0 ]]; then
     if "$BWRAP_BLOCKED"; then
         echo "  Note: bwrap IS installed but cannot create namespaces."
         echo "  See the instructions above to fix this."
+        echo ""
+    fi
+    if [[ -n "${_lmod_suggestion:-}" ]]; then
+        echo "  Tip: bubblewrap module found via lmod: $_lmod_suggestion"
+        echo "  Continue the install (--no-test), then add to sandbox.conf:"
+        echo "    SANDBOX_MODULES=(\"$_lmod_suggestion\")"
         echo ""
     fi
     exit 1
