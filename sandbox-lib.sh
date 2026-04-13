@@ -360,13 +360,39 @@ else
     _USER_CONF="$_USER_DATA_DIR/sandbox.conf"
 fi
 
-# --- Auto-init: deploy user config on first run ---
-if [[ ! -f "$_USER_CONF" && -f "$SANDBOX_DIR/sandbox.conf" ]]; then
-    mkdir -p "$(dirname "$_USER_CONF")"
-    cp "$SANDBOX_DIR/sandbox.conf" "$_USER_CONF"
-    echo "sandbox: created $(basename "$_USER_CONF") in $_USER_DATA_DIR" >&2
-    echo "  edit to customize: \$EDITOR $_USER_CONF" >&2
+# --- Auto-init: deploy user config ---
+# Always deploy the full sandbox.conf template to the user dir, even
+# when an admin config exists (users need their own customization layer).
+# The template source is sandbox.conf.template in the install dir (falls
+# back to sandbox.conf if no template exists). This avoids copying the
+# admin skeleton when an admin has replaced sandbox.conf.
+_user_conf_target="$_USER_DATA_DIR/sandbox.conf"
+_user_conf_sha="$_USER_DATA_DIR/.sandbox.conf.origin-sha256"
+_user_conf_template="$SANDBOX_DIR/sandbox.conf.template"
+[[ -f "$_user_conf_template" ]] || _user_conf_template="$SANDBOX_DIR/sandbox.conf"
+
+if [[ -f "$_user_conf_template" ]]; then
+    _src_sha="$(sha256sum "$_user_conf_template" | cut -d' ' -f1)"
+    if [[ ! -f "$_user_conf_target" ]]; then
+        # First run — deploy
+        mkdir -p "$_USER_DATA_DIR"
+        cp "$_user_conf_template" "$_user_conf_target"
+        echo "$_src_sha" > "$_user_conf_sha"
+        echo "sandbox: created sandbox.conf in $_USER_DATA_DIR" >&2
+        echo "  edit to customize: \$EDITOR $_user_conf_target" >&2
+    elif [[ -f "$_user_conf_sha" ]]; then
+        # Upgrade — overwrite only if user hasn't modified
+        _dest_sha="$(sha256sum "$_user_conf_target" | cut -d' ' -f1)"
+        _origin_sha="$(cat "$_user_conf_sha" 2>/dev/null)"
+        if [[ "$_dest_sha" == "$_origin_sha" && "$_dest_sha" != "$_src_sha" ]]; then
+            cp "$_user_conf_template" "$_user_conf_target"
+            echo "$_src_sha" > "$_user_conf_sha"
+            _is_true "${SANDBOX_QUIET:-false}" || \
+                echo "sandbox: updated sandbox.conf (new defaults from upgrade)" >&2
+        fi
+    fi
 fi
+unset _user_conf_target _user_conf_sha _user_conf_template _src_sha _dest_sha _origin_sha
 
 # --- Config variable names (single source of truth) ---
 # Arrays and scalars that config files can set. Used by _load_untrusted_config
@@ -1088,14 +1114,17 @@ _deploy_agent_files() {
                     local dest_sha
                     dest_sha="$(sha256sum "$dest" | cut -d' ' -f1)"
                     if [[ "$dest_sha" == "$origin_sha" ]]; then
-                        # User hasn't modified — safe to overwrite
-                        mkdir -p "$dest_dir"
-                        cp "$src" "$dest"
-                        echo "$src_sha" > "$sha_file"
+                        if [[ "$src_sha" != "$origin_sha" ]]; then
+                            # Unmodified + new version available — update
+                            cp "$src" "$dest"
+                            echo "$src_sha" > "$sha_file"
+                        fi
+                    elif [[ "$src_sha" != "$origin_sha" ]]; then
+                        # User modified AND new version available
+                        _is_true "${SANDBOX_QUIET:-false}" || \
+                            echo "sandbox: agents/$agent_name/$fname has local edits — new version available in $src" >&2
                     fi
-                    # else: user modified, skip
                 fi
-                # No sidecar = pre-existing user file, don't touch
             else
                 # First deploy
                 mkdir -p "$dest_dir"

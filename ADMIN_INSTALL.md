@@ -23,9 +23,17 @@ sudo cp /app/lib/agent-sandbox/sandbox-admin.conf /app/lib/agent-sandbox/sandbox
 sudo $EDITOR /app/lib/agent-sandbox/sandbox.conf
 ```
 
-The install ships both `sandbox.conf` (full user config, auto-deployed to `~/.config/agent-sandbox/` on first run) and `sandbox-admin.conf` (minimal enforcement skeleton). Copy the admin skeleton over `sandbox.conf` in the install dir to use it as the admin baseline. The Makefile handles directory creation, permissions, and the `agent-sandbox` symlink. If your site uses a different prefix (e.g. `/usr/local`), change `_ADMIN_DIR` in `sandbox-lib.sh` to match.
+The install ships three config files:
 
-On first run, `sandbox-lib.sh` auto-creates `~/.config/agent-sandbox/sandbox.conf` (from the install-dir template) and deploys agent templates (`agent.md`, `settings.json`) to `~/.config/agent-sandbox/agents/`. Users customize policy via `user.conf` and `conf.d/*.conf`. Agent overlays run in subshells, so mutations to permission globals are structurally impossible — per-agent profiles cannot bypass admin-enforced policy.
+| File | Purpose |
+|---|---|
+| `sandbox.conf` | Admin enforcement baseline (replace with `sandbox-admin.conf` skeleton) |
+| `sandbox.conf.template` | Full user config, auto-deployed to `~/.config/agent-sandbox/sandbox.conf` on first run. Never modified by admins — ensures users always get the complete documented config. |
+| `sandbox-admin.conf` | Minimal skeleton with only enforcement knobs. Copy over `sandbox.conf` to use as admin baseline. |
+
+The Makefile handles directory creation, permissions, and the `agent-sandbox` symlink. If your site uses a different prefix (e.g. `/usr/local`), change `_ADMIN_DIR` in `sandbox-lib.sh` to match.
+
+On first run, users automatically get `sandbox.conf` (from `sandbox.conf.template`) and agent templates (`agent.md`, `settings.json`) in `~/.config/agent-sandbox/`. On upgrade, unmodified copies are silently updated; user-edited files are preserved with a message pointing to the new version. Users customize via `sandbox.conf`, `user.conf`, and `conf.d/*.conf`. Agent overlays run in subshells, so mutations to permission globals are structurally impossible — per-agent profiles cannot bypass admin-enforced policy.
 
 Each agent profile directory (`agents/<name>/`) follows a file contract:
 
