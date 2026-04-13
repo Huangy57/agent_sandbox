@@ -89,7 +89,7 @@ if command -v bwrap &>/dev/null; then
         # Check if a newer bwrap is available via lmod
         if type module &>/dev/null; then
             _spider_out=$(module spider bubblewrap 2>&1 || true)
-            _lmod_match=$(echo "$_spider_out" | grep -oP 'bubblewrap/\S+' | sort -V | tail -1)
+            _lmod_match=$(echo "$_spider_out" | grep -oE 'bubblewrap/[^ ]+' | sort -V | tail -1)
             if [[ -n "$_lmod_match" ]]; then
                 echo "  Or use lmod — add to sandbox.conf: SANDBOX_MODULES=(\"$_lmod_match\")"
             fi
@@ -131,7 +131,7 @@ else
         # module spider outputs to stderr; search for bubblewrap modules
         _spider_out=$(module spider bubblewrap 2>&1 || true)
         # Extract the most recent version line, e.g. "bubblewrap/0.11.1-GCCcore-12.3.0"
-        _lmod_match=$(echo "$_spider_out" | grep -oP 'bubblewrap/\S+' | sort -V | tail -1)
+        _lmod_match=$(echo "$_spider_out" | grep -oE 'bubblewrap/[^ ]+' | sort -V | tail -1)
         if [[ -n "$_lmod_match" ]]; then
             _lmod_suggestion="$_lmod_match"
         fi

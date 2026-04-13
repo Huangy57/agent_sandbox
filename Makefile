@@ -72,6 +72,18 @@ install: install-lib install-bin install-docs
 	@echo "Next steps:"
 	@echo "  make install-conf     Create sandbox.conf + deploy agent templates"
 	@echo "  agent-sandbox -- claude"
+	@# Hint: if lmod has a bubblewrap module, mention SANDBOX_MODULES.
+	@# Source lmod init with `[ -f ] && .` to avoid sh fatal error on missing file.
+	@_mod=$$(sh -c 'for f in /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/sh /app/lmod/lmod/init/sh; do [ -f "$$f" ] && . "$$f" && break; done; module spider bubblewrap 2>&1' 2>/dev/null | grep -oE 'bubblewrap/[^ ]+' | sort -V | tail -1); \
+	if [ -n "$$_mod" ]; then \
+		echo ""; \
+		if command -v bwrap >/dev/null 2>&1; then \
+			echo "  Note: bubblewrap also available via lmod: $$_mod"; \
+		else \
+			echo "  Tip: bubblewrap available via lmod: $$_mod"; \
+		fi; \
+		echo "  To use it, add to sandbox.conf:  SANDBOX_MODULES=(\"$$_mod\")"; \
+	fi
 
 install-lib:
 	@# Core scripts
