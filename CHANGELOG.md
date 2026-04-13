@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-04-13
+
+### Added
+
+- **Lmod module loading:** new `SANDBOX_MODULES` config array loads
+  user-specified lmod modules before backend detection, so
+  module-provided binaries (e.g., a newer bubblewrap on HPC systems)
+  appear on PATH automatically. The `module` command is sourced from
+  common init locations if not already available.
+- **AppArmor diagnostic:** when the bwrap smoke test fails, the sandbox
+  now checks `kernel.apparmor_restrict_unprivileged_userns` and prints
+  an actionable message pointing admins to install an AppArmor profile
+  (Ubuntu 24.04+).
+
 ## [0.3.1] - 2026-04-13
 
 ### Fixed

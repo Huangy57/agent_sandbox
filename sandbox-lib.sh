@@ -401,7 +401,7 @@ _CONFIG_ARRAYS=(
     ALLOWED_PROJECT_PARENTS READONLY_MOUNTS HOME_READONLY HOME_WRITABLE
     BLOCKED_FILES BLOCKED_ENV_VARS BLOCKED_ENV_PATTERNS ALLOWED_ENV_VARS
     EXTRA_BLOCKED_PATHS EXTRA_WRITABLE_PATHS DENIED_WRITABLE_PATHS
-    SANDBOX_ENV SUPPRESS_AGENT_WARNINGS
+    SANDBOX_ENV SUPPRESS_AGENT_WARNINGS SANDBOX_MODULES
 )
 _CONFIG_SCALARS=(
     SANDBOX_BACKEND PRIVATE_TMP PRIVATE_IPC FILTER_PASSWD BIND_DEV_PTS
@@ -1419,6 +1419,39 @@ prepare_agent_configs() {
     done
 }
 
+# ── Lmod module loading ─────────────────────────────────────────
+#
+# Load user-configured lmod modules before backend detection so that
+# module-provided binaries (e.g., a newer bwrap) appear on PATH.
+
+_load_sandbox_modules() {
+    [[ ${#SANDBOX_MODULES[@]} -gt 0 ]] 2>/dev/null || return 0
+
+    # Ensure the `module` shell function is available
+    if ! type module &>/dev/null; then
+        for _init in /etc/profile.d/lmod.sh \
+                     /usr/share/lmod/lmod/init/bash \
+                     /app/lmod/lmod/init/bash; do
+            if [[ -f "$_init" ]]; then
+                # shellcheck disable=SC1090
+                source "$_init"
+                break
+            fi
+        done
+    fi
+
+    if ! type module &>/dev/null; then
+        echo "sandbox: warning: SANDBOX_MODULES set but 'module' command not available" >&2
+        return 1
+    fi
+
+    for _mod in "${SANDBOX_MODULES[@]}"; do
+        if ! module load "$_mod" 2>/dev/null; then
+            echo "sandbox: warning: failed to load module '$_mod'" >&2
+        fi
+    done
+}
+
 # ── Backend detection ───────────────────────────────────────────
 
 # SANDBOX_BACKEND can be set in sandbox.conf or environment.
@@ -1528,6 +1561,7 @@ _BACKEND_DETECTED=false
 
 build_bwrap_args() {
     if [[ "$_BACKEND_DETECTED" == false ]]; then
+        _load_sandbox_modules
         detect_backend
         _BACKEND_DETECTED=true
     fi

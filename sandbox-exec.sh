@@ -155,6 +155,9 @@ case "${HOME_ACCESS:-restricted}" in
     *) echo "Error: HOME_ACCESS must be 'restricted', 'tmpwrite', 'read', or 'write' (got '${HOME_ACCESS}')." >&2; exit 1 ;;
 esac
 
+# Load user-configured lmod modules (updates PATH for backend detection)
+_load_sandbox_modules
+
 # Detect and load backend
 detect_backend
 _BACKEND_DETECTED=true
