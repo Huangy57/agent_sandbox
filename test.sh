@@ -3617,8 +3617,11 @@ SANDBOX_MODULES=()
 CONF
 )
 if SANDBOX_CONF="$_empty_conf" sandbox_must_run bash -c 'echo ok'; then
-    [[ "$OUTPUT" == *"ok"* ]] && pass "L02: Empty SANDBOX_MODULES is a no-op" \
-        || fail "L02: Sandbox with empty SANDBOX_MODULES didn't run guest" "$OUTPUT"
+    if [[ "$OUTPUT" == *"ok"* ]]; then
+        pass "L02: Empty SANDBOX_MODULES is a no-op"
+    else
+        fail "L02: Sandbox with empty SANDBOX_MODULES didn't run guest" "$OUTPUT"
+    fi
 fi
 
 # ── L03: Bad module name warns but doesn't abort ──
