@@ -102,32 +102,43 @@ make install-conf    # creates ~/.config/agent-sandbox/sandbox.conf
 ### What Gets Installed
 
 ```
-$(PREFIX)/lib/agent-sandbox/
-├── sandbox-exec.sh       # Main entry point (auto-selects backend)
-├── sandbox-lib.sh        # Core library (config loading, backend detection)
-├── agents/               # Agent profiles (all always prepared; declarative metadata)
-│   ├── claude/           # Claude Code — merges CLAUDE.md + settings.json
-│   ├── codex/            # OpenAI Codex CLI — merges AGENTS.md
-│   ├── gemini/           # Google Gemini CLI — merges GEMINI.md
-│   ├── aider/            # Aider — injects AIDER_READ
-│   └── opencode/         # OpenCode — merges AGENTS.md
+$(PREFIX)/lib/agent-sandbox/            # Runtime (code + defaults)
+├── sandbox-exec.sh                     # Main entry point (auto-selects backend)
+├── sandbox-lib.sh                      # Core library (config loading, backend detection)
+├── sandbox.conf.template               # Full user config (source for auto-init)
+├── sandbox-admin.conf                  # Minimal admin enforcement skeleton
+├── agents/                             # Agent profiles (overlay logic + defaults)
+│   ├── claude/                         #   overlay.sh, config.conf (code — not user-editable)
+│   ├── codex/                          #   agent.md, settings.json deployed to user dir
+│   ├── gemini/                         #     on first run (see below)
+│   ├── aider/
+│   └── opencode/
 ├── backends/
-│   ├── bwrap.sh          # Bubblewrap backend (mount namespace isolation)
-│   ├── firejail.sh       # Firejail backend (setuid sandbox, namespaces + seccomp)
-│   ├── landlock.sh       # Landlock backend (LSM filesystem restrictions)
-│   ├── landlock-sandbox.py  # Landlock syscall helper (Python)
-│   └── generate-seccomp.py  # Seccomp BPF filter generator (for bwrap)
-├── chaperon/             # Secure Slurm proxy (see CHAPERON.md)
-│   ├── chaperon.sh       # Main loop (runs OUTSIDE sandbox)
-│   ├── protocol.sh       # CHAPERON/1 wire protocol primitives
-│   ├── handlers/         # Request handlers (sbatch, srun, scancel, etc.)
-│   └── stubs/            # PATH-shadowing stubs (all talk to chaperon)
-├── bin/                  # Fallback PATH shadows (delegate to stubs)
+│   ├── bwrap.sh                        # Bubblewrap (mount namespace isolation)
+│   ├── firejail.sh                     # Firejail (setuid sandbox, namespaces + seccomp)
+│   ├── landlock.sh                     # Landlock (LSM filesystem restrictions)
+│   ├── landlock-sandbox.py             # Landlock syscall helper (Python)
+│   └── generate-seccomp.py            # Seccomp BPF filter generator (for bwrap)
+├── chaperon/                           # Secure Slurm proxy (see CHAPERON.md)
+│   ├── chaperon.sh, protocol.sh
+│   ├── handlers/                       # Request handlers (sbatch, srun, scancel, etc.)
+│   └── stubs/                          # PATH-shadowing stubs (all talk to chaperon)
+├── bin/                                # Fallback PATH shadows (delegate to stubs)
 
-~/.config/agent-sandbox/
-├── sandbox.conf          # ← Your permissions config — edit this
-├── conf.d/               # Per-project overrides
+~/.config/agent-sandbox/                # User config (auto-created on first run)
+├── sandbox.conf                        # ← Your permissions config — edit this
+├── conf.d/                             # Per-project overrides
+├── agents/                             # User-customizable agent templates
+│   ├── claude/
+│   │   ├── agent.md                    #   Sandbox instructions injected into CLAUDE.md
+│   │   └── settings.json               #   Merged into Claude's settings
+│   ├── codex/agent.md
+│   ├── gemini/agent.md
+│   ├── aider/agent.md
+│   └── opencode/agent.md
 ```
+
+Unmodified configs are silently updated on upgrade. User-edited files are preserved (tracked via `.origin-sha256` sidecars). Run `make install-conf FORCE=1` to reset all templates to defaults.
 
 ### Backends
 
