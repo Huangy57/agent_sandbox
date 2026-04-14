@@ -86,13 +86,19 @@ cd agent_sandbox
 make install                         # installs to ~/.local/
 ```
 
-This puts `agent-sandbox` on your `PATH` and installs the runtime to `~/.local/lib/agent-sandbox/`.
-For system-wide (admin) installation, see [ADMIN_INSTALL.md](ADMIN_INSTALL.md).
-
-Then create your config:
+This installs `agent-sandbox` to `~/.local/bin/` and the runtime to `~/.local/lib/agent-sandbox/`. Make sure `~/.local/bin` is on your PATH:
 
 ```bash
-make install-conf    # creates ~/.config/agent-sandbox/sandbox.conf
+# Add to your ~/.bashrc or ~/.zshrc if not already there
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+For system-wide (admin) installation, see [ADMIN_INSTALL.md](ADMIN_INSTALL.md).
+
+Config and agent templates are auto-deployed to `~/.config/agent-sandbox/` on first run. To deploy them manually:
+
+```bash
+make install-conf    # creates sandbox.conf + agent templates
 ```
 
 ### What Gets Installed
