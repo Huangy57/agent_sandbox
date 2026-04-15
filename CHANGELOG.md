@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **sbatch shebang ignored:** the chaperon wrapper always ran user scripts
+  via `sh -c`, ignoring the script's `#!` line. Bash features (`source`,
+  arrays, `[[ ]]`) failed silently and non-shell shebangs
+  (`#!/usr/bin/env python3`) were completely ignored. The wrapper now
+  extracts the interpreter from the shebang and pipes the script to it
+  via stdin. Falls back to `/bin/sh` when no shebang is present,
+  matching Slurm's default behavior.
+
 - **sbatch CWD mismatch:** the chaperon's `sbatch` handler now `cd`s to
   the agent's working directory before calling real `sbatch`. Previously,
   Slurm inherited the chaperon's CWD, causing `SLURM_SUBMIT_DIR` to
