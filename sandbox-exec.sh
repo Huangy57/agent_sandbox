@@ -212,6 +212,8 @@ if [[ -n "$_CHAPERON_DIR" ]]; then
         SLURM_SCOPE="$_SLURM_SCOPE_ENV"
     fi
     export SLURM_SCOPE="${SLURM_SCOPE:-project}"
+    export CHAPERON_LOG_LEVEL="${CHAPERON_LOG_LEVEL:-info}"
+    export CHAPERON_LOG_RETAIN_DAYS="${CHAPERON_LOG_RETAIN_DAYS:-7}"
 
     "$SCRIPT_DIR/chaperon/chaperon.sh" \
         "$_CHAPERON_DIR" "$PROJECT_DIR" "$SCRIPT_DIR/sandbox-exec.sh" \

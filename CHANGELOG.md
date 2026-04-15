@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-04-15
+
+### Added
+
+- **Chaperon audit logging:** every proxied Slurm request is now logged to
+  a per-session file at `~/.local/state/agent-sandbox/chaperon/`. Each log
+  entry records the command, full arguments, working directory, and script
+  size with shebang. Handler denials (`_sandbox_deny` / `_sandbox_warn`)
+  are captured at WARN level, providing a persistent security audit trail.
+  Configurable via `CHAPERON_LOG_LEVEL` (debug/info/warn/error, default
+  info) and `CHAPERON_LOG_RETAIN_DAYS` (default 7) in `sandbox.conf`.
+  Filenames include hostname for NFS-safe uniqueness across concurrent
+  sandboxes on multiple machines. Logs are auto-pruned by age and a
+  50 MiB total size cap. Script body content is intentionally not logged
+  to prevent secret/credential exposure. Log files and directory are
+  restricted to owner-only access (700/600).
+
 ## [0.3.3] - 2026-04-15
 
 ### Fixed
