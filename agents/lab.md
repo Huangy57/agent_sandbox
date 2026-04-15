@@ -198,9 +198,21 @@ resolve the ambiguity before attempting `kernel exec`.
 
 ## Requirements
 
-`uv` on PATH. The first time `lab kernel exec` (or any runtime
-subcommand) runs, `lab` ensures that `psutil`, `jupyter_client`, and
-`nbformat` are installed in the project `.venv` alongside `ipykernel`.
+`uv` on PATH. Lab maintains its own helper venv (`.jupyter/.labvenv`,
+symlinked to `/tmp` for performance) with `psutil`, `jupyter_client`, and
+`nbformat`. This is separate from the project `.venv`, which only gets
+`ipykernel` via `lab kernel add`.
+
+## NFS Performance
+
+On shared HPC with NFS storage, lab automatically:
+- Places the helper venv on `/tmp` (46x faster Python startup)
+- Redirects `UV_CACHE_DIR` to `/tmp/uv-cache-$UID`
+- Sets `UV_LINK_MODE=copy` to avoid cross-filesystem hardlink failures
+- Pre-compiles `.pyc` files after package installs
+
+The `/tmp` venvs are ephemeral. After a node reboot or sandbox restart,
+`lab start` or `lab kernel add` recreates them automatically.
 
 ## Troubleshooting
 

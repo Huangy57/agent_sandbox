@@ -40,6 +40,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   kernels' jupyter_session paths first, then server root-relative, then
   CWD-relative. Fixes cross-directory notebook references when running
   from the nexus root.
+- **NFS performance optimizations:** lab helper venv now lives on `/tmp`
+  (symlinked from `.jupyter/.labvenv`) for 46x faster Python startup.
+  `UV_CACHE_DIR` defaults to `/tmp/uv-cache-$UID` (was `~/.cache/uv` on
+  NFS). `UV_LINK_MODE=copy` avoids cross-filesystem hardlink failures.
+  Package installs are followed by `compileall` to pre-generate `.pyc`
+  files, halving NFS round-trips on subsequent imports.
+
+### Fixed
+
+- **SQLite3 notebook trust:** auto-generates `jupyter_server_config.py`
+  that falls back to in-memory trust DB when `_sqlite3` is unavailable,
+  suppressing "all notebooks will be untrusted" warnings on systems with
+  limited Python builds.
 
 ## [0.3.2] - 2026-04-13
 
