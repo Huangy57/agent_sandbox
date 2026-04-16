@@ -10,14 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **`ENABLED_AGENTS` array** in `sandbox.conf` (default: `claude codex
-  gemini aider opencode`). Each enabled agent contributes its declared
+  gemini`). Each enabled agent contributes its declared
   writable/readable/blocked paths to the sandbox surface from
   `agents/<name>/config.conf`, and only its `overlay.sh` runs.
   Disabled agents leave their config dirs invisible — so e.g. `~/.pi`
-  doesn't become writable for users who don't run pi. Adding support
-  for a new agent is now: drop in `agents/<name>/`, append the name
-  to `ENABLED_AGENTS`. See "Adding support for a new agent" in the
-  README.
+  or `~/.config/opencode` don't become writable for users who don't
+  run those agents. Adding support for a new agent is now: drop in
+  `agents/<name>/`, append the name to `ENABLED_AGENTS`. See "Adding
+  support for a new agent" in the README.
 - **`AGENT_BLOCKED_FILES` field** in agent `config.conf`. Each enabled
   agent's blocked files (typically the real `AGENTS.md` / `CLAUDE.md`
   so the sandbox-merged copy wins) are folded into `BLOCKED_FILES`
@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Default `ENABLED_AGENTS` is now conservative:** only `claude`,
+  `codex`, and `gemini` are enabled by default. `aider`, `opencode`,
+  and `pi` ship as opt-in (uncomment the corresponding
+  `ENABLED_AGENTS+=("name")` in sandbox.conf). Rationale: every
+  enabled agent expands the sandbox writable surface, and dotdir
+  names that could plausibly belong to unrelated user data should
+  stay invisible until the user opts in. **Migration:** existing
+  users with explicit `HOME_WRITABLE` entries for these agents (the
+  pre-refactor `sandbox.conf` style) keep working unchanged. Users
+  who relied on the implicit defaults need to add the relevant
+  agents to `ENABLED_AGENTS` in their sandbox.conf to restore
+  behavior.
 - Per-agent entries (`.claude`, `.codex`, `.gemini`,
   `.config/opencode`, `.aider.conf.yml`, agent `AGENTS.md` blocks)
   no longer hardcoded in `sandbox.conf` defaults. They now come from

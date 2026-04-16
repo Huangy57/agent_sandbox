@@ -109,9 +109,11 @@ HOME_WRITABLE=(
 # dir. Adding a name with no matching agents/<name>/ directory is
 # silently ignored. Adding an agent expands the writable surface to
 # whatever its config.conf declares — only enable agents you actually
-# use, so e.g. ~/.pi (which could be unrelated user data) doesn't
-# become writable for users who don't use the pi agent.
-ENABLED_AGENTS=("claude" "codex" "gemini" "aider" "opencode")
+# use, so e.g. ~/.pi or ~/.config/opencode (which could be unrelated
+# user data) don't become writable for users who don't run those
+# agents. Available profiles not enabled by default: aider, opencode,
+# pi (uncomment "ENABLED_AGENTS+=(...)" in sandbox.conf to enable).
+ENABLED_AGENTS=("claude" "codex" "gemini")
 
 # Home access mode:
 #   tmpwrite   — (default) tmpfs HOME, selective mounts, writable tmpfs (ephemeral writes, lost on exit)

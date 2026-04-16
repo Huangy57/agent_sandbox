@@ -355,9 +355,11 @@ The sandbox supports a growing set of AI coding agents. Each one lives in `agent
 | `claude` | enabled | `~/.claude`, `~/.claude.json`, `~/.local/{state,share}/claude` | OAuth or `ANTHROPIC_API_KEY` |
 | `codex` | enabled | `~/.codex` | OAuth (`codex login`) or `OPENAI_API_KEY` |
 | `gemini` | enabled | `~/.gemini` | Google OAuth or `GOOGLE_API_KEY` |
-| `aider` | enabled | (none — env-var only) | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
-| `opencode` | enabled | `~/.config/opencode` + `~/.local/{share,state}/opencode` + `~/.cache/opencode` | OAuth or provider API key |
-| `pi` | **disabled** | `~/.pi/agent` | Opt-in: `ENABLED_AGENTS+=("pi")` in sandbox.conf |
+| `aider` | **disabled** | (none — env-var only) | Opt-in: `ENABLED_AGENTS+=("aider")` |
+| `opencode` | **disabled** | `~/.config/opencode` + `~/.local/{share,state}/opencode` + `~/.cache/opencode` | Opt-in: `ENABLED_AGENTS+=("opencode")` |
+| `pi` | **disabled** | `~/.pi/agent` | Opt-in: `ENABLED_AGENTS+=("pi")` |
+
+The default set is conservative on purpose — every enabled agent expands the writable surface to whatever its `config.conf` declares, so dotdir names that could plausibly belong to unrelated user data (`~/.pi`, `~/.config/opencode`, etc.) stay invisible until you opt in.
 
 **Enabling and disabling agents:** edit `ENABLED_AGENTS` in `sandbox.conf`. Adding a name folds that agent's declared writable/readable/blocked paths into the sandbox surface and runs its instruction-merging overlay; removing a name leaves the agent's paths invisible (no auth persistence, no AGENTS.md hide).
 

@@ -1217,6 +1217,7 @@ mkdir -p "$HOME/.config/agent-sandbox/conf.d"
 # sandbox-exec.sh restores env overrides AFTER loading conf.d.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+ENABLED_AGENTS+=("aider")
 CONF
 _raw_warn=$(SANDBOX_QUIET=false OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" \
@@ -1240,6 +1241,7 @@ fi
 # SUPPRESS_AGENT_WARNINGS silences warnings even when credentials are blocked.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+ENABLED_AGENTS+=("aider")
 SUPPRESS_AGENT_WARNINGS=("aider")
 CONF
 _raw_sup=$(SANDBOX_QUIET=false OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
@@ -1254,6 +1256,7 @@ fi
 # "all" silences every agent.
 cat > "$_warn_conf" <<'CONF'
 ALLOWED_ENV_VARS=()
+ENABLED_AGENTS+=("aider")
 SUPPRESS_AGENT_WARNINGS=("all")
 CONF
 _raw_all=$(SANDBOX_QUIET=false OPENAI_API_KEY=test-key timeout 15 "$SANDBOX_EXEC" \
@@ -1377,8 +1380,8 @@ rm -f "$_warn_conf"
 
 # ── Auto-mkdir of HOME_WRITABLE entries ──
 # Missing agent config dirs should be pre-created so first-run auth
-# persists. Pick a subdir that's unlikely to already exist.
-_probe_dir="$HOME/.config/opencode"
+# persists. Use a default-enabled agent's dir as the probe.
+_probe_dir="$HOME/.claude"
 _probe_existed=false
 [[ -e "$_probe_dir" ]] && _probe_existed=true
 # Run a sandbox invocation to trigger _ensure_writable_home_dirs.
@@ -1490,7 +1493,14 @@ else
     fail "pi agent: ~/.pi was writable without being enabled" "$_pi_default_out"
 fi
 
-# (e) opencode XDG drift fix: all four XDG dirs must be writable.
+# (e) opencode XDG drift fix: when opencode is enabled, all four XDG
+# dirs (config, data, cache, state) must be writable. Opencode is
+# opt-in (not in default ENABLED_AGENTS), so enable it via conf.d.
+_opencode_conf="$HOME/.config/agent-sandbox/conf.d/test-opencode-enable-$$.conf"
+_TEST_TEMP_FILES+=("$_opencode_conf")
+cat > "$_opencode_conf" <<'CONF'
+ENABLED_AGENTS+=("opencode")
+CONF
 _opencode_out=$(timeout 15 "$SANDBOX_EXEC" \
     --backend "$CURRENT_BACKEND" --project-dir "$PROJECT_DIR" \
     -- bash -c '
@@ -1500,9 +1510,23 @@ _opencode_out=$(timeout 15 "$SANDBOX_EXEC" \
       done' 2>&1)
 _opencode_fails=$(echo "$_opencode_out" | grep -c '^FAIL ' || true)
 if [[ "$_opencode_fails" -eq 0 ]]; then
-    pass "opencode: all four XDG dirs (config, data, cache, state) are writable"
+    pass "opencode: all four XDG dirs (config, data, cache, state) are writable when enabled"
 else
     fail "opencode: ${_opencode_fails} XDG dir(s) not writable" "$_opencode_out"
+fi
+rm -f "$_opencode_conf"
+
+# (f) opt-in agents are NOT writable by default (regression guard:
+# opencode and aider must stay invisible until explicitly enabled).
+_optin_default_out=$(timeout 15 "$SANDBOX_EXEC" \
+    --backend "$CURRENT_BACKEND" --project-dir "$PROJECT_DIR" \
+    -- bash -c '
+      touch "$HOME/.config/opencode/.probe-$$" 2>/dev/null && echo "WRITE opencode" || echo "BLOCK opencode"
+      touch "$HOME/.aider.conf.yml" 2>/dev/null && echo "WRITE aider" || echo "BLOCK aider"' 2>&1)
+if echo "$_optin_default_out" | grep -q '^WRITE opencode$'; then
+    fail "opencode dir was writable by default (should be opt-in)" "$_optin_default_out"
+else
+    pass "opt-in agents: ~/.config/opencode is not writable by default"
 fi
 
 rm -rf "$_probe_agent_dir" "$_probe_writable_dir"
