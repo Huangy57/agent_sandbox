@@ -81,8 +81,12 @@ backend_prepare() {
     fi
 
     # --- Read-only system mounts ---
+    # LOCAL PATCH: use -e so unix sockets are mountable (e.g. the
+    # systemd ssh-agent at $XDG_RUNTIME_DIR/ssh-agent.sock declared in
+    # conf.d/sarah-nexus.conf). The original `-d || -f` test silently
+    # dropped sockets, breaking SSH inside the sandbox.
     for mount in "${READONLY_MOUNTS[@]}"; do
-        if [[ -d "$mount" || -f "$mount" ]]; then
+        if [[ -e "$mount" ]]; then
             BWRAP_ARGS+=(--ro-bind "$mount" "$mount")
         fi
     done
@@ -241,6 +245,15 @@ backend_prepare() {
     if [[ -d /run/systemd/resolve ]]; then
         BWRAP_ARGS+=(--ro-bind /run/systemd/resolve /run/systemd/resolve)
     fi
+
+    # LOCAL PATCH: re-bind any READONLY_MOUNTS entries under /run/ AFTER
+    # the tmpfs above (the earlier loop's binds get wiped by --tmpfs /run).
+    # Covers e.g. /run/user/$UID/ssh-agent.sock from conf.d/sarah-nexus.conf.
+    for mount in "${READONLY_MOUNTS[@]}"; do
+        if [[ "$mount" == /run/* && -e "$mount" ]]; then
+            BWRAP_ARGS+=(--ro-bind "$mount" "$mount")
+        fi
+    done
 
     if [[ -L /var/run ]]; then
         BWRAP_ARGS+=(--symlink /run /var/run)
