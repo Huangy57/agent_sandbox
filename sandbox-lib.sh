@@ -46,12 +46,22 @@ _build_chaperon_blocked_binaries() {
 # Resolve HOME from the password database, not the environment variable.
 # An agent (or user config) could export HOME=/tmp/evil before the sandbox
 # starts, redirecting all home-relative paths.  getent passwd is authoritative.
-HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6)" || true
+# In parent sandboxes without a passwd entry for the current UID, preserve the
+# original HOME instead of letting a failed fallback resolve to the current dir.
+_ORIGINAL_HOME="${HOME:-}"
+if ! _RESOLVED_USER="$(id -un 2>/dev/null)" || [[ -z "$_RESOLVED_USER" ]]; then
+    _RESOLVED_USER="$(id -u)"
+fi
+HOME="$(getent passwd "$_RESOLVED_USER" 2>/dev/null | cut -d: -f6)" || true
+if [[ -z "$HOME" && -n "$_ORIGINAL_HOME" && -d "$_ORIGINAL_HOME" ]]; then
+    HOME="$(cd "$_ORIGINAL_HOME" && pwd)"
+fi
 if [[ -z "$HOME" ]]; then
-    # Fallback: the ~ expansion uses the passwd entry, not $HOME.
+    # Fallback: the ~ expansion uses the passwd entry if one exists.
     HOME="$(cd ~ && pwd)"
 fi
 export HOME
+unset _ORIGINAL_HOME _RESOLVED_USER
 
 # User data directory — user-owned config, temp data.
 # Separate from SANDBOX_DIR (script location) so that an admin-owned install
