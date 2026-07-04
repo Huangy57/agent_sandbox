@@ -256,6 +256,17 @@ backend_exec() {
         ulimit -u "$SANDBOX_NPROC_LIMIT" 2>/dev/null || true
     fi
 
+    # Hide sandbox-setting vars (HIDE_FROM_SANDBOX). Done HERE, not in
+    # backend_prepare's env filter: host-side code that runs between
+    # prepare and exec (chaperon spawn, banner gating, the ulimit
+    # above) still reads several of these. An in-process unset is the
+    # landlock equivalent of bwrap's --unsetenv — the sandboxed child
+    # inherits this shell's environment directly.
+    local _hv
+    while IFS= read -r _hv; do
+        unset "$_hv" 2>/dev/null || true
+    done < <(_hide_from_sandbox_names)
+
     python3 "$LANDLOCK_SANDBOX" "${LANDLOCK_ARGS[@]}" -- "$@"
     exit $?
 }

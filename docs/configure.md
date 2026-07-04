@@ -67,6 +67,7 @@ Without an admin baseline, `~/.config/agent-sandbox/sandbox.conf` is the only co
 | [`BLOCKED_ENV_VARS`](#blocked_env_vars) | array | **yes** | service-credential names |
 | [`BLOCKED_ENV_PATTERNS`](#blocked_env_patterns) | array | **yes** | `SSH_*`, `*_TOKEN`, `*_SECRET`, … |
 | [`ALLOWED_ENV_VARS`](#allowed_env_vars) | array | additive | agent API-key names |
+| [`HIDE_FROM_SANDBOX`](#hide_from_sandbox) | array | **yes** | host-side setting names (`SLURM_SCOPE`, `CHAPERON_LOG_*`, `SANDBOX_QUIET`, …) |
 | [`SANDBOX_ENV`](#sandbox_env) | array | additive | `()` |
 | [`SANDBOX_BACKEND`](#sandbox_backend) | scalar | no | `auto` (bwrap → firejail → landlock) |
 | [`SANDBOX_PREFERRED_BACKENDS`](#sandbox_backend) | (set inline via `SANDBOX_BACKEND` only) | — | — |
@@ -399,6 +400,20 @@ ALLOWED_ENV_VARS+=(
     "MY_APP_API_KEY"   # site-specific
 )
 ```
+
+### `HIDE_FROM_SANDBOX`
+
+**Type** array · **Admin-enforced** **yes** · **Default** `("SLURM_SCOPE" "CHAPERON_LOG_LEVEL" "CHAPERON_LOG_RETAIN_DAYS" "SANDBOX_QUIET" "HOME_ACCESS" "SANDBOX_NPROC_LIMIT" "SANDBOX_CONF")`
+
+Sandbox-**setting** env vars scrubbed from the sandboxed environment. These names configure the sandbox and chaperon on the **host** side and have no consumer inside the sandbox — forwarding them only tells an agent about its operator's configuration (logging policy, Slurm scoping, quiet mode). The scrub applies **after** the intentional orientation markers are set and is **not** overridden by [`ALLOWED_ENV_VARS`](#allowed_env_vars): the list is admin-enforced, so users and projects can add names but never remove admin or default entries.
+
+The markers `SANDBOX_ACTIVE`, `SANDBOX_BACKEND`, `SANDBOX_PROJECT_DIR`, and `_CHAPERON_FIFO_DIR` are deliberately **not** hidden by default. Add `SANDBOX_BACKEND` to conceal which confinement mechanism is in use:
+
+```bash
+HIDE_FROM_SANDBOX+=("SANDBOX_BACKEND")
+```
+
+**Caveats.** Hiding `SANDBOX_PROJECT_DIR` or `_CHAPERON_FIFO_DIR` breaks in-sandbox `sbatch`/`srun` (the stubs need both to reach the chaperon). Hiding `SANDBOX_ACTIVE` removes the agent's "am I sandboxed" signal. `PATH` is refused with a warning — scrubbing it would break every exec inside the sandbox. Slurm re-entry is unaffected by the defaults: the compute-node sandbox re-reads config rather than depending on forwarded copies.
 
 ### `SANDBOX_ENV`
 
