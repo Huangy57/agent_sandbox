@@ -1546,7 +1546,10 @@ rm -f "$_hfs_err"
 if SLURM_SCOPE=project CHAPERON_LOG_LEVEL=info CHAPERON_LOG_RETAIN_DAYS=7 \
    sandbox bash -c 'env | grep -E "^(SANDBOX_|CHAPERON_|_CHAPERON_|SLURM_SCOPE=|HOME_ACCESS=|HIDE_FROM_SANDBOX=)" | sort; true'; then
     _keep_re='^(SANDBOX_ACTIVE|SANDBOX_BACKEND|SANDBOX_PROJECT_DIR|_CHAPERON_FIFO_DIR)='
-    _violations="$(echo "$OUTPUT" | grep -vE "$_keep_re" | grep -v '^$' || true)"
+    # SANDBOX_TEST_* is this harness's own fixture namespace (the Lmod CI
+    # job exports SANDBOX_TEST_LMOD / SANDBOX_TEST_MODULE_* to enable
+    # section 13) — test plumbing, not sandbox settings; exempt it.
+    _violations="$(echo "$OUTPUT" | grep -vE "$_keep_re" | grep -vE '^SANDBOX_TEST_' | grep -v '^$' || true)"
     _markers_ok=true
     for _m in SANDBOX_ACTIVE SANDBOX_BACKEND SANDBOX_PROJECT_DIR; do
         echo "$OUTPUT" | grep -q "^${_m}=" || _markers_ok=false
