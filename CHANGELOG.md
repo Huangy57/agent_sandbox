@@ -43,6 +43,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Documented in `sandbox.conf`, `sandbox-admin.conf`, and
   `docs/configure.md`.
 
+### Fixed
+
+- **`bin/tmux` wrapper now runs the newest tmux available instead of
+  hardcoding `/usr/bin/tmux` — fixes TUI garbling on hosts with an
+  ancient system tmux.** On hosts whose system tmux predates 3.2/3.3
+  (e.g. tmux 2.6 on enterprise Linux baselines), modern full-screen
+  TUIs such as Claude Code rendered with intermittent garbling/tearing
+  inside the sandbox: old tmux cannot proxy synchronized output
+  (DCS `?2026`), RGB negotiation, or DCS passthrough, and no 2.6-era
+  config can compensate. The wrapper now version-compares the system
+  binary against the common Homebrew locations
+  (`$HOMEBREW_PREFIX/bin`, `~/.linuxbrew/bin`,
+  `/home/linuxbrew/.linuxbrew/bin`, `/opt/homebrew/bin`,
+  `/usr/local/bin`) and execs the highest version found, falling back
+  to `/usr/bin/tmux` when nothing newer exists. Selection is
+  recursion-safe (a candidate resolving to the wrapper itself is
+  skipped) and strictly version-ordered (an equally-old candidate
+  never displaces the system binary). Set `SANDBOX_TMUX_BIN` to pin a
+  specific binary regardless of version. After `brew install tmux`
+  outside the sandbox, the wrapper picks it up automatically on the
+  next sandbox start — no configuration needed.
+
 ## [0.13.1] - 2026-07-01
 
 ### Added
