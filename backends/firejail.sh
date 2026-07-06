@@ -435,6 +435,16 @@ backend_prepare() {
 }
 
 backend_exec() {
+    # Hide sandbox-setting vars (HIDE_FROM_SANDBOX). Done HERE, not in
+    # backend_prepare's env filter: host-side code that runs between
+    # prepare and exec (chaperon spawn, banner gating) still reads
+    # several of these. firejail passes our environment through, so an
+    # in-process unset is the equivalent of bwrap's --unsetenv.
+    local _hv
+    while IFS= read -r _hv; do
+        unset "$_hv" 2>/dev/null || true
+    done < <(_hide_from_sandbox_names)
+
     firejail "${FIREJAIL_ARGS[@]}" -- "$@"
     exit $?
 }

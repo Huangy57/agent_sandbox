@@ -444,6 +444,32 @@ BLOCKED_ENV_VARS=(
     # not duplicate them here.
 )
 
+# Sandbox-SETTING env vars to hide from the sandboxed environment (#75).
+# These configure the sandbox/chaperon HOST-side and have no consumer
+# inside: forwarding them is pure reconnaissance surface (an agent
+# reading its operator's logging/scoping policy). Scrubbed AFTER the
+# intentional SANDBOX_* markers are set, with no ALLOWED_ENV_VARS
+# exemption — the list is admin-enforced (users/projects can ADD
+# entries, never remove them). Slurm re-entry is unaffected: the
+# compute-node sandbox-exec.sh re-reads config, and the chaperon
+# receives these per-invocation (not via the sandbox environment).
+#
+# The intentional markers (SANDBOX_ACTIVE, SANDBOX_BACKEND,
+# SANDBOX_PROJECT_DIR, _CHAPERON_FIFO_DIR) are NOT listed. Admins may
+# add SANDBOX_BACKEND to cut backend recon; hiding SANDBOX_PROJECT_DIR
+# or _CHAPERON_FIFO_DIR breaks in-sandbox Slurm re-entry / chaperon
+# RPC, and hiding SANDBOX_ACTIVE removes the agent's "am I sandboxed"
+# signal — technically allowed, but know what you are turning off.
+HIDE_FROM_SANDBOX=(
+    "SLURM_SCOPE"
+    "CHAPERON_LOG_LEVEL"
+    "CHAPERON_LOG_RETAIN_DAYS"
+    "SANDBOX_QUIET"
+    "HOME_ACCESS"
+    "SANDBOX_NPROC_LIMIT"
+    "SANDBOX_CONF"
+)
+
 # Credential-pattern globs: block env vars matching common credential naming
 # conventions. Configurable via sandbox.conf / user.conf (admin-enforced).
 # To let a specific variable through, add it to ALLOWED_ENV_VARS.
@@ -497,6 +523,25 @@ _is_allowed_env() {
         [[ "$_var" == "$_a" ]] && return 0
     done
     return 1
+}
+
+# ── Helper: emit the effective HIDE_FROM_SANDBOX names, one per line ──
+# Consumed by the backends (bwrap --unsetenv args; landlock/firejail
+# in-process unset). Deliberately does NOT consult ALLOWED_ENV_VARS:
+# HIDE_FROM_SANDBOX is admin-enforced, and an allow-list exemption
+# would let user config carve holes in admin policy. PATH is refused
+# outright — it is not a sandbox-setting var, and scrubbing it yields
+# a sandbox where nothing resolves; a listed PATH is always a
+# misconfiguration, so warn instead of obeying.
+_hide_from_sandbox_names() {
+    local _hv
+    for _hv in "${HIDE_FROM_SANDBOX[@]+"${HIDE_FROM_SANDBOX[@]}"}"; do
+        if [[ "$_hv" == "PATH" ]]; then
+            echo "WARNING: HIDE_FROM_SANDBOX entry 'PATH' would break every in-sandbox exec — ignored." >&2
+            continue
+        fi
+        printf '%s\n' "$_hv"
+    done
 }
 
 # ── Helper: check if an env var matches a hardcoded credential pattern ──
@@ -688,6 +733,7 @@ _CONFIG_ARRAYS=(
     ALLOWED_PROJECT_PARENTS READONLY_MOUNTS HOME_READONLY HOME_WRITABLE
     HOME_SEEDED_FILES
     BLOCKED_FILES BLOCKED_ENV_VARS BLOCKED_ENV_PATTERNS ALLOWED_ENV_VARS
+    HIDE_FROM_SANDBOX
     EXTRA_BLOCKED_PATHS EXTRA_WRITABLE_PATHS DENIED_WRITABLE_PATHS
     DEVICES DEVICES_BLACKLIST
     SANDBOX_ENV SUPPRESS_AGENT_WARNINGS SANDBOX_MODULES ENABLED_AGENTS
@@ -701,7 +747,7 @@ _CONFIG_SCALARS=(
     LANDLOCK_REQUIRED_ABI LANDLOCK_HARD_REQUIREMENT
 )
 # Enforced arrays: user cannot remove admin-set entries (only add).
-_ENFORCED_ARRAYS=(BLOCKED_FILES BLOCKED_ENV_VARS BLOCKED_ENV_PATTERNS EXTRA_BLOCKED_PATHS DEVICES_BLACKLIST NETWORK_BLOCKLIST NETWORK_BLOCKLIST_EXCEPT)
+_ENFORCED_ARRAYS=(BLOCKED_FILES BLOCKED_ENV_VARS BLOCKED_ENV_PATTERNS EXTRA_BLOCKED_PATHS DEVICES_BLACKLIST NETWORK_BLOCKLIST NETWORK_BLOCKLIST_EXCEPT HIDE_FROM_SANDBOX)
 
 # --- Load an untrusted config file in an isolated subprocess ---
 #
@@ -1115,6 +1161,11 @@ _enforce_admin_policy() {
         for _item in "${BLOCKED_ENV_PATTERNS[@]}"; do [[ "$_item" == "$_a" ]] && { _found=true; break; }; done
         $_found || echo "WARNING: ${_label} removed admin-enforced BLOCKED_ENV_PATTERNS entry '${_a}' — restored." >&2
     done
+    for _a in "${_ADMIN_HIDE_FROM_SANDBOX[@]}"; do
+        _found=false
+        for _item in "${HIDE_FROM_SANDBOX[@]}"; do [[ "$_item" == "$_a" ]] && { _found=true; break; }; done
+        $_found || echo "WARNING: ${_label} removed admin-enforced HIDE_FROM_SANDBOX entry '${_a}' — restored." >&2
+    done
     for _a in "${_ADMIN_EXTRA_BLOCKED_PATHS[@]}"; do
         _found=false
         for _item in "${EXTRA_BLOCKED_PATHS[@]}"; do [[ "$_item" == "$_a" ]] && { _found=true; break; }; done
@@ -1201,6 +1252,7 @@ _enforce_admin_policy() {
     local _user_bev=("${BLOCKED_ENV_VARS[@]}")
     local _user_bep=("${BLOCKED_ENV_PATTERNS[@]}")
     local _user_aev=("${ALLOWED_ENV_VARS[@]}")
+    local _user_hfs=("${HIDE_FROM_SANDBOX[@]}")
     local _user_ebp=("${EXTRA_BLOCKED_PATHS[@]}")
     local _user_hw=("${HOME_WRITABLE[@]}")
     local _user_ewp=("${EXTRA_WRITABLE_PATHS[@]}")
@@ -1217,6 +1269,7 @@ _enforce_admin_policy() {
     BLOCKED_ENV_VARS=("${_ADMIN_BLOCKED_ENV_VARS[@]}")
     BLOCKED_ENV_PATTERNS=("${_ADMIN_BLOCKED_ENV_PATTERNS[@]}")
     ALLOWED_ENV_VARS=("${_ADMIN_ALLOWED_ENV_VARS[@]}")
+    HIDE_FROM_SANDBOX=("${_ADMIN_HIDE_FROM_SANDBOX[@]}")
     EXTRA_BLOCKED_PATHS=("${_ADMIN_EXTRA_BLOCKED_PATHS[@]}")
     HOME_READONLY=("${_ADMIN_HOME_READONLY[@]}")
     HOME_SEEDED_FILES=("${_ADMIN_HOME_SEEDED_FILES[@]}")
@@ -1252,6 +1305,7 @@ _enforce_admin_policy() {
     _merge_additions _user_bev  _ADMIN_BLOCKED_ENV_VARS       BLOCKED_ENV_VARS
     _merge_additions _user_bep  _ADMIN_BLOCKED_ENV_PATTERNS   BLOCKED_ENV_PATTERNS
     _merge_additions _user_aev  _ADMIN_ALLOWED_ENV_VARS       ALLOWED_ENV_VARS
+    _merge_additions _user_hfs  _ADMIN_HIDE_FROM_SANDBOX      HIDE_FROM_SANDBOX
     _merge_additions _user_ebp  _ADMIN_EXTRA_BLOCKED_PATHS    EXTRA_BLOCKED_PATHS
     _merge_additions _user_ewp  _ADMIN_EXTRA_WRITABLE_PATHS   EXTRA_WRITABLE_PATHS
     _merge_additions _user_rom  _ADMIN_READONLY_MOUNTS        READONLY_MOUNTS
@@ -1447,6 +1501,7 @@ _snapshot_admin_config() {
     _ADMIN_BLOCKED_ENV_VARS=("${BLOCKED_ENV_VARS[@]}")
     _ADMIN_BLOCKED_ENV_PATTERNS=("${BLOCKED_ENV_PATTERNS[@]}")
     _ADMIN_ALLOWED_ENV_VARS=("${ALLOWED_ENV_VARS[@]}")
+    _ADMIN_HIDE_FROM_SANDBOX=("${HIDE_FROM_SANDBOX[@]}")
     _ADMIN_EXTRA_BLOCKED_PATHS=("${EXTRA_BLOCKED_PATHS[@]}")
     _ADMIN_HOME_READONLY=("${HOME_READONLY[@]}")
     _ADMIN_HOME_WRITABLE=("${HOME_WRITABLE[@]}")

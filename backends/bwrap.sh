@@ -787,6 +787,15 @@ backend_prepare() {
         _is_blocked_by_pattern "$name" && BWRAP_ARGS+=(--unsetenv "$name") || true
     done < <(env)
 
+    # Hide sandbox-setting vars (HIDE_FROM_SANDBOX) from the child.
+    # Emitted AFTER the SANDBOX_* marker --setenvs on purpose: bwrap
+    # applies its argv left-to-right with last-wins precedence, so an
+    # admin-listed marker stays hidden. No ALLOWED_ENV_VARS exemption —
+    # the list is admin-enforced (see _hide_from_sandbox_names).
+    while IFS= read -r _hv; do
+        BWRAP_ARGS+=(--unsetenv "$_hv")
+    done < <(_hide_from_sandbox_names)
+
 }
 
 backend_exec() {
@@ -832,6 +841,15 @@ backend_exec() {
     if [[ -n "${SANDBOX_NPROC_LIMIT:-}" ]]; then
         ulimit -u "$SANDBOX_NPROC_LIMIT" 2>/dev/null || true
     fi
+
+    # Hidden sandbox-setting vars (HIDE_FROM_SANDBOX): scrub from OUR
+    # environment too — same /proc/1/environ reasoning as the
+    # BLOCKED_ENV_VARS scrub above. Placed after the ulimit block,
+    # which is the last host-side consumer (SANDBOX_NPROC_LIMIT is a
+    # default hide entry).
+    while IFS= read -r _hv; do
+        unset "$_hv" 2>/dev/null || true
+    done < <(_hide_from_sandbox_names)
 
     # ── filtered-mode composition: pasta wraps bwrap ───────────────
     #

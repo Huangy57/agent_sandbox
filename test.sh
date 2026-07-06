@@ -1495,6 +1495,87 @@ fi
 
 rm -f "$_sandbox_env_conf"
 
+# ── 3.8 Sandbox-setting env vars stay host-side (HIDE_FROM_SANDBOX, #75) ──
+# Settings that configure the sandbox/chaperon HOST-side (SLURM_SCOPE,
+# CHAPERON_LOG_*, SANDBOX_QUIET, HOME_ACCESS, …) have no consumer inside
+# the sandbox. The chaperon receives them inline on its invocation; the
+# backends scrub every HIDE_FROM_SANDBOX name at exec time. These tests
+# pin the keep-set invariant so the next accidental `export` in the
+# launcher (the mechanism behind the original leaks) fails CI instead of
+# shipping.
+
+# 3.8.1 — Registered config array + admin-enforced (add-only for users).
+if (
+    set -uo pipefail
+    export _SANDBOX_LIB_NO_INIT=1
+    source "$SCRIPT_DIR/sandbox-lib.sh" 2>/dev/null
+    printf ' %s ' "${_CONFIG_ARRAYS[@]}" | grep -q ' HIDE_FROM_SANDBOX ' || exit 1
+    printf ' %s ' "${_ENFORCED_ARRAYS[@]}" | grep -q ' HIDE_FROM_SANDBOX '
+); then
+    pass "HIDE_FROM_SANDBOX is a registered, admin-enforced config array"
+else
+    fail "HIDE_FROM_SANDBOX missing from _CONFIG_ARRAYS / _ENFORCED_ARRAYS"
+fi
+
+# 3.8.2 — Helper emits the defaults; PATH is refused with a warning.
+_hfs_err="$(mktemp)"
+if (
+    set -uo pipefail
+    export _SANDBOX_LIB_NO_INIT=1
+    source "$SCRIPT_DIR/sandbox-lib.sh" 2>/dev/null
+    HIDE_FROM_SANDBOX+=("PATH")
+    _names="$(_hide_from_sandbox_names 2>"$_hfs_err")"
+    for _expected in SLURM_SCOPE CHAPERON_LOG_LEVEL CHAPERON_LOG_RETAIN_DAYS \
+                     SANDBOX_QUIET HOME_ACCESS SANDBOX_NPROC_LIMIT SANDBOX_CONF; do
+        echo "$_names" | grep -qx "$_expected" || { echo "missing: $_expected"; exit 1; }
+    done
+    echo "$_names" | grep -qx "PATH" && { echo "PATH not refused"; exit 1; }
+    grep -q "HIDE_FROM_SANDBOX entry 'PATH'" "$_hfs_err"
+); then
+    pass "_hide_from_sandbox_names emits the 7 defaults and refuses PATH (warn)"
+else
+    fail "_hide_from_sandbox_names default emission / PATH refusal broken"
+fi
+rm -f "$_hfs_err"
+
+# 3.8.3 — Keep-set invariant: inside the sandbox, the ONLY sandbox/
+# chaperon vars are the intentional orientation markers. Everything
+# else — including the harness's own exported SANDBOX_QUIET=true and
+# the launch-env overrides below — must be scrubbed. Override values
+# equal the defaults, so this launch is behavior-identical.
+if SLURM_SCOPE=project CHAPERON_LOG_LEVEL=info CHAPERON_LOG_RETAIN_DAYS=7 \
+   sandbox bash -c 'env | grep -E "^(SANDBOX_|CHAPERON_|_CHAPERON_|SLURM_SCOPE=|HOME_ACCESS=|HIDE_FROM_SANDBOX=)" | sort; true'; then
+    _keep_re='^(SANDBOX_ACTIVE|SANDBOX_BACKEND|SANDBOX_PROJECT_DIR|_CHAPERON_FIFO_DIR)='
+    # SANDBOX_TEST_* is this harness's own fixture namespace (the Lmod CI
+    # job exports SANDBOX_TEST_LMOD / SANDBOX_TEST_MODULE_* to enable
+    # section 13) — test plumbing, not sandbox settings; exempt it.
+    _violations="$(echo "$OUTPUT" | grep -vE "$_keep_re" | grep -vE '^SANDBOX_TEST_' | grep -v '^$' || true)"
+    _markers_ok=true
+    for _m in SANDBOX_ACTIVE SANDBOX_BACKEND SANDBOX_PROJECT_DIR; do
+        echo "$OUTPUT" | grep -q "^${_m}=" || _markers_ok=false
+    done
+    if [[ -z "$_violations" ]] && $_markers_ok; then
+        pass "In-sandbox env keep-set invariant: markers only, no setting vars"
+    else
+        fail "Keep-set invariant violated (leak or missing marker)" \
+             "violations: [${_violations}] markers_ok=${_markers_ok} env: ${OUTPUT}"
+    fi
+fi
+
+# 3.8.4 — User conf.d can ADD a hide entry (here: the SANDBOX_BACKEND
+# marker, the documented recon-trimming knob) and it takes effect.
+_hfs_conf="$HOME/.config/agent-sandbox/conf.d/test-hide-from-sandbox-$$.conf"
+mkdir -p "$(dirname "$_hfs_conf")"
+echo 'HIDE_FROM_SANDBOX+=("SANDBOX_BACKEND")' > "$_hfs_conf"
+if sandbox bash -c 'echo "${SANDBOX_BACKEND:-HIDDEN}"'; then
+    if [[ "$OUTPUT" == "HIDDEN" ]]; then
+        pass "HIDE_FROM_SANDBOX user addition hides the SANDBOX_BACKEND marker"
+    else
+        fail "HIDE_FROM_SANDBOX user addition did not hide SANDBOX_BACKEND" "$OUTPUT"
+    fi
+fi
+rm -f "$_hfs_conf"
+
 echo ""
 
 # ── 4. Agent profiles: overlays, warnings, and permission guardrail ──

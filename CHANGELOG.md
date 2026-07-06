@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Sandbox-setting env vars no longer forward into the sandbox
+  (`#75`).** The launcher exported `SLURM_SCOPE`, `CHAPERON_LOG_LEVEL`,
+  `CHAPERON_LOG_RETAIN_DAYS` — and, since v0.13.1, `SANDBOX_QUIET` —
+  for the host-side chaperon child; under the inherit-then-block env
+  model the same exports bled into the sandbox child, where all four
+  are dead weight and mild reconnaissance (operator logging, Slurm
+  scoping, and quiet policy). Root-cause fix: the chaperon now receives
+  them inline on its invocation instead of via global `export`, and the
+  backends scrub any residue (e.g. copies the user exported before
+  launch) at exec time. In-sandbox Slurm re-entry is unaffected — the
+  compute-node sandbox re-reads config and the chaperon bakes the quiet
+  decision into its job wrappers, never relying on forwarded copies.
+
+### Added
+
+- **`HIDE_FROM_SANDBOX` — admin-enforced deny-list of sandbox-setting
+  env vars scrubbed from inside the sandbox (`#75`).** Defaults cover
+  every host-side setting with no in-sandbox consumer (`SLURM_SCOPE`,
+  `CHAPERON_LOG_LEVEL`, `CHAPERON_LOG_RETAIN_DAYS`, `SANDBOX_QUIET`,
+  `HOME_ACCESS`, `SANDBOX_NPROC_LIMIT`, `SANDBOX_CONF`). Admins and
+  users can ADD names — e.g. `SANDBOX_BACKEND` to conceal the
+  confinement mechanism — but never remove admin or default entries
+  (registered in `_ENFORCED_ARRAYS`), and `ALLOWED_ENV_VARS` does not
+  override it. Applied after the intentional `SANDBOX_*` orientation
+  markers in all three backends (bwrap `--unsetenv`, landlock/firejail
+  in-process `unset`); `PATH` is refused with a warning. The
+  previously-implicit "settings don't leak inside" invariant is now
+  pinned by a keep-set test (§3.8 of `test.sh`): the in-sandbox
+  environment must contain exactly the orientation markers and no
+  other `SANDBOX_*` / `CHAPERON_*` / config var, so the next
+  accidental `export` in the launcher fails CI instead of shipping.
+  Documented in `sandbox.conf`, `sandbox-admin.conf`, and
+  `docs/configure.md`.
+
 ### Fixed
 
 - **`bin/tmux` wrapper now runs the newest tmux available instead of

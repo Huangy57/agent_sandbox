@@ -325,15 +325,19 @@ fi
 # chaperon.err captures only unexpected failures (set -e, source errors,
 # unhandled signals) that kill the process before logging is initialized.
 if [[ -n "$_CHAPERON_DIR" ]]; then
-    # Export config vars that chaperon handlers need (shell variables
-    # are not inherited by child processes unless exported).
+    # Config vars the chaperon handlers need. Passed inline on the
+    # chaperon invocation below, NOT `export`ed: a global export here
+    # bleeds into the sandbox child too (inherit-then-block never
+    # re-blocks it), forwarding host-side settings that have no
+    # consumer inside (#75). The chaperon is the only intended
+    # recipient of these four.
     # Restore env override if the user set SLURM_SCOPE before sandbox launch.
     if [[ -n "${_SLURM_SCOPE_ENV:-}" ]]; then
         SLURM_SCOPE="$_SLURM_SCOPE_ENV"
     fi
-    export SLURM_SCOPE="${SLURM_SCOPE:-project}"
-    export CHAPERON_LOG_LEVEL="${CHAPERON_LOG_LEVEL:-info}"
-    export CHAPERON_LOG_RETAIN_DAYS="${CHAPERON_LOG_RETAIN_DAYS:-7}"
+    SLURM_SCOPE="${SLURM_SCOPE:-project}"
+    CHAPERON_LOG_LEVEL="${CHAPERON_LOG_LEVEL:-info}"
+    CHAPERON_LOG_RETAIN_DAYS="${CHAPERON_LOG_RETAIN_DAYS:-7}"
 
     # Propagate the RESOLVED quiet decision (env > config > default,
     # already settled above) to the chaperon so the jobs it submits stay
@@ -347,12 +351,21 @@ if [[ -n "$_CHAPERON_DIR" ]]; then
     # reading its log. Canonicalize to true/false so the chaperon (which
     # does not source sandbox-lib.sh) needs no _is_true helper.
     if _is_true "${SANDBOX_QUIET:-false}"; then
-        export SANDBOX_QUIET=true
+        SANDBOX_QUIET=true
     else
-        export SANDBOX_QUIET=false
+        SANDBOX_QUIET=false
     fi
 
-    "$SCRIPT_DIR/chaperon/chaperon.sh" \
+    # NOTE: if the user exported any of these before launch, the plain
+    # assignments above retain the export attribute and the value would
+    # still reach the sandbox child via inheritance. The backends scrub
+    # that residue: every HIDE_FROM_SANDBOX name (these four are
+    # defaults) is --unsetenv'd / unset at exec time.
+    SLURM_SCOPE="$SLURM_SCOPE" \
+    CHAPERON_LOG_LEVEL="$CHAPERON_LOG_LEVEL" \
+    CHAPERON_LOG_RETAIN_DAYS="$CHAPERON_LOG_RETAIN_DAYS" \
+    SANDBOX_QUIET="$SANDBOX_QUIET" \
+        "$SCRIPT_DIR/chaperon/chaperon.sh" \
         "$_CHAPERON_DIR" "$PROJECT_DIR" "$SCRIPT_DIR/sandbox-exec.sh" \
         >/dev/null 2>"$_CHAPERON_DIR/chaperon.err" &
     _CHAPERON_PID=$!
